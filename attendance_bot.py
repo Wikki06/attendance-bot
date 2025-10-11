@@ -165,7 +165,7 @@ def change_password(chat_id, new_password):
             send_message(chat_id, "🔒 Your password has been changed successfully!")
             print(f"[INFO] Password changed for chat_id={nid}")
             return
-    send_message(chat_id, ⚠️ You are not registered. Use /start to register first.")
+    send_message(chat_id, "⚠️ You are not registered. Use /start to register first.")
     print(f"[WARN] change_password called but chat_id not found: {nid}")
 
 def load_old_data():

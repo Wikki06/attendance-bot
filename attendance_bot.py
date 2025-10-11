@@ -11,6 +11,15 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+import chromedriver_autoinstaller
+import time
+
 
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 CSV_FILE = "students.csv"
@@ -156,7 +165,7 @@ def change_password(chat_id, new_password):
             send_message(chat_id, "🔒 Your password has been changed successfully!")
             print(f"[INFO] Password changed for chat_id={nid}")
             return
-    send_message(chat_id, "⚠️ You are not registered. Use /start to register first.")
+    send_message(chat_id, ⚠️ You are not registered. Use /start to register first.")
     print(f"[WARN] change_password called but chat_id not found: {nid}")
 
 def load_old_data():
@@ -211,17 +220,27 @@ def attendance_monitor():
         save_new_data(old_data)
         print("⏱️ Attendance check complete. Sleeping 10 mins...")
         time.sleep(600)
-
 def fetch_attendance(username, password):
     """
-    Logs into CARE CRM, clicks Attendance tab (triggers calculation), and fetches attendance.
-    Returns a dictionary like: {'CBM348': 85.0, 'GE3791': 90.0, 'OVERALL': 87.5}
+    Logs into CARE CRM, clicks Attendance tab, fetches attendance,
+    returns a dictionary like: {'CBM348': 85.0, 'GE3791': 90.0, 'OVERALL': 87.5}
     """
     attendance = {}
     driver = None
     try:
-        print(f"🔐 Logging in for {username}...")
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+        # ✅ Auto install ChromeDriver
+        chromedriver_autoinstaller.install()
+
+        # ✅ Headless Chrome options for Linux
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+
+        # ✅ Start driver
+        driver = webdriver.Chrome(options=chrome_options)
         driver.get("https://crm.care.ac.in/login.html")
 
         # ✅ Login
@@ -229,22 +248,17 @@ def fetch_attendance(username, password):
         driver.find_element(By.ID, "password").send_keys(password)
         driver.find_element(By.ID, "login_button").click()
 
-        # ✅ Wait for dashboard element (Attendance link) instead of URL
+        # ✅ Wait for dashboard
         dashboard_element = WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.XPATH, "//a[contains(text(),'Attendance')]"))
         )
-        print("✅ Logged in successfully, dashboard loaded")
-
-        # ✅ Trigger real Attendance click
         driver.execute_script("arguments[0].click();", dashboard_element)
-        print("✅ Attendance tab clicked (JS)")
-        time.sleep(3)  # wait for JS to calculate table
+        time.sleep(3)  # wait for JS
 
-        # ✅ Check for iframe if table inside
+        # ✅ Check iframe if attendance table inside
         try:
             iframe = driver.find_element(By.TAG_NAME, "iframe")
             driver.switch_to.frame(iframe)
-            print("✅ Switched to iframe")
         except:
             pass
 
@@ -253,6 +267,7 @@ def fetch_attendance(username, password):
             EC.visibility_of_element_located((By.CSS_SELECTOR, "table"))
         )
 
+        # ✅ Read attendance
         rows = table.find_elements(By.TAG_NAME, "tr")
         for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
@@ -271,7 +286,6 @@ def fetch_attendance(username, password):
             if highlighted_values:
                 overall = sum(highlighted_values) / len(highlighted_values)
                 attendance["OVERALL"] = round(overall, 2)
-                print(f"📊 Calculated Overall: {overall:.2f}%")
 
         return attendance
 
@@ -280,10 +294,10 @@ def fetch_attendance(username, password):
         import traceback
         traceback.print_exc()
         return {}
+
     finally:
         if driver:
             driver.quit()
-
 def telegram_listener():
     print("📡 Bot is live. Listening for /start, /changepass, /attendance, and admin commands...")
     offset = load_offset()

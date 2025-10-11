@@ -17,9 +17,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 import chromedriver_autoinstaller
-import time
-
 
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 CSV_FILE = "students.csv"
@@ -228,46 +228,55 @@ def fetch_attendance(username, password):
     attendance = {}
     driver = None
     try:
-        # ✅ Auto install ChromeDriver
+        # Auto install Chromedriver
         chromedriver_autoinstaller.install()
 
-        # ✅ Headless Chrome options for Linux
+        # Headless Chrome options for Linux (Railway)
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
+        # Point to Chromium binary installed on Railway
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
 
-        # ✅ Start driver
-        driver = webdriver.Chrome(options=chrome_options)
+        # Start driver
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()),
+            options=chrome_options
+        )
+
+        # Open login page
         driver.get("https://crm.care.ac.in/login.html")
 
-        # ✅ Login
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "login_id"))).send_keys(username)
+        # Login
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, "login_id"))
+        ).send_keys(username)
         driver.find_element(By.ID, "password").send_keys(password)
         driver.find_element(By.ID, "login_button").click()
 
-        # ✅ Wait for dashboard
+        # Wait for dashboard & click Attendance
         dashboard_element = WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.XPATH, "//a[contains(text(),'Attendance')]"))
         )
         driver.execute_script("arguments[0].click();", dashboard_element)
         time.sleep(3)  # wait for JS
 
-        # ✅ Check iframe if attendance table inside
+        # Check iframe if table inside
         try:
             iframe = driver.find_element(By.TAG_NAME, "iframe")
             driver.switch_to.frame(iframe)
         except:
             pass
 
-        # ✅ Wait for table
+        # Wait for table
         table = WebDriverWait(driver, 30).until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, "table"))
         )
 
-        # ✅ Read attendance
+        # Read attendance rows
         rows = table.find_elements(By.TAG_NAME, "tr")
         for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
@@ -280,7 +289,7 @@ def fetch_attendance(username, password):
                     except ValueError:
                         print(f"⚠️ Could not parse {perc} for {code}")
 
-        # ✅ Calculate overall
+        # Calculate overall
         if attendance:
             highlighted_values = [v for k, v in attendance.items() if k in HIGHLIGHTED_SUBJECTS]
             if highlighted_values:

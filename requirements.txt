@@ -1,0 +1,5 @@
+selenium
+requests
+python-telegram-bot==13.15
+webdriver-manager
+schedule

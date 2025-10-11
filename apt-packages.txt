@@ -1,7 +1,5 @@
-chromium-browser
 chromium
 chromium-driver
-chromium-chromedriver
 fonts-liberation
 libappindicator3-1
 libasound2

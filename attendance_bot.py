@@ -239,7 +239,7 @@ def fetch_attendance(username, password):
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
         # Point to Chromium binary installed on Railway
-        chrome_options.binary_location = "/usr/bin/chromium-browser"
+        chrome_options.binary_location = "/usr/bin/chromium"
 
         # Start driver
         driver = webdriver.Chrome(

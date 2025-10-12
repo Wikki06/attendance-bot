@@ -10,10 +10,10 @@ from telegram import Update, Bot
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # ==================== CONFIG ====================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
 STUDENTS_FILE = "students.csv"
-ATTENDANCE_FILE = "attendance_data.json"
+ATTENDANCE_FILE = "attendance.json"
 OFFSET_FILE = "offset.txt"
 CHECK_INTERVAL = 600  # 10 minutes
 

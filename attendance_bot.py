@@ -1,183 +1,183 @@
-import requests
-import csv
-import time
 import json
 import os
 import threading
-import logging
+import time
 from datetime import datetime
-from telegram import Update, Bot
-from telegram.ext import Updater, CommandHandler, CallbackContext
+import requests
 
-# ==================== CONFIG ====================
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
+
+# ------------------- CONFIG -------------------
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
-API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
-STUDENTS_FILE = "students.csv"
-ATTENDANCE_FILE = "attendance.json"
+DATA_FILE = "attendance_data.json"
 OFFSET_FILE = "offset.txt"
-CHECK_INTERVAL = 600  # 10 minutes
+STUDENTS_FILE = "students.json"
+HIGHLIGHTED_SUBJECTS = ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"]
+ADMIN_CHAT_ID = "1718437414"  # your admin chat_id
+CHECK_INTERVAL = 600  # 10 mins
+# ----------------------------------------------
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+# ------------------- UTILITIES ----------------
+def load_json(file_path):
+    if os.path.exists(file_path):
+        with open(file_path, "r") as f:
+            return json.load(f)
+    return {}
 
-# ==================== CSV UTILS ====================
-def load_students():
-    if not os.path.exists(STUDENTS_FILE):
-        return []
-    with open(STUDENTS_FILE, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+def save_json(file_path, data):
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=2)
 
-def save_student(register_num, chat_id):
-    file_exists = os.path.exists(STUDENTS_FILE)
-    with open(STUDENTS_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["register_num", "chat_id"])
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({"register_num": register_num, "chat_id": chat_id})
+def send_message(chat_id, text, context=None):
+    if context:
+        context.bot.send_message(chat_id=chat_id, text=text)
 
-# ==================== ATTENDANCE FETCH ====================
-def fetch_attendance(register_num):
-    payload = {"register_num": register_num, "function": "sva"}
+# ------------------- STUDENT MANAGEMENT ----------------
+def register_student(chat_id, reg_no):
+    students = load_json(STUDENTS_FILE)
+    chat_id = str(chat_id)
+    students[chat_id] = {"reg_no": reg_no}
+    save_json(STUDENTS_FILE, students)
+
+def get_student(chat_id):
+    students = load_json(STUDENTS_FILE)
+    return students.get(str(chat_id))
+
+# ------------------- FETCH ATTENDANCE ----------------
+def fetch_attendance(reg_no):
+    """
+    Fetch attendance from CARE CRM API.
+    Returns a dict like {"CBM348": 96.97, "GE3791": 90.91, ..., "OVERALL": 92.25}
+    """
     try:
-        response = requests.post(API_URL, json=payload, timeout=15)
+        payload = {"register_num": reg_no, "function": "sva"}
+        url = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"  # replace with actual API
+        response = requests.post(url, json=payload, timeout=20)
         data = response.json()
-
-        if not data.get("success"):
-            logging.error("❌ API Error: %s", data.get("message"))
-            return None
-
-        result = data["result"]["attendance"]
-        overall = sum(float(x["attendance_percentage"]) for x in result) / len(result)
-        attendance_dict = {sub["sub_code"]: float(sub["attendance_percentage"]) for sub in result}
-        attendance_dict["OVERALL"] = round(overall, 2)
-        return attendance_dict
-
-    except Exception as e:
-        logging.error(f"⚠️ Fetch failed: {e}")
-        return None
-
-# ==================== ALERT LOGIC ====================
-def check_alerts(bot, chat_id, register_num, old_data, new_data):
-    if not old_data or not new_data:
-        return
-
-    drops = []
-    for subject, new_percent in new_data.items():
-        if subject in old_data and new_percent < old_data[subject]:
-            diff = old_data[subject] - new_percent
-            drops.append(f"{subject}: dropped by {diff:.2f}%")
-
-    overall = new_data.get("OVERALL", 0)
-    if drops:
-        bot.send_message(chat_id=chat_id, text=f"⚠️ Drop Alert for {register_num}\n" + "\n".join(drops))
-
-    if overall <= 75:
-        bot.send_message(chat_id=chat_id, text=f"🚨 Your overall attendance is {overall}%. You are below 75%! Please attend classes regularly.")
-    elif overall <= 80:
-        bot.send_message(chat_id=chat_id, text=f"⚠️ Your overall attendance is {overall}%. You are close to 75%. Be careful!")
-
-# ==================== ATTENDANCE MONITOR ====================
-def attendance_monitor():
-    bot = Bot(BOT_TOKEN)
-    logging.info("⏱️ Attendance monitor started...")
-
-    while True:
-        students = load_students()
-        if not students:
-            logging.info("🧾 No students subscribed yet.")
-            time.sleep(CHECK_INTERVAL)
-            continue
-
-        if os.path.exists(ATTENDANCE_FILE):
-            with open(ATTENDANCE_FILE, "r") as f:
-                old_attendance = json.load(f)
+        if data.get("success"):
+            attendance = data["result"].get("attendance", [])
+            att_dict = {}
+            for a in attendance:
+                code = a.get("sub_code")
+                perc = float(a.get("attendance_percentage", 0))
+                if code:
+                    att_dict[code] = perc
+            # Calculate OVERALL from highlighted subjects
+            overall = sum([att_dict.get(s, 0) for s in HIGHLIGHTED_SUBJECTS]) / len(HIGHLIGHTED_SUBJECTS)
+            att_dict["OVERALL"] = round(overall, 2)
+            return att_dict
         else:
-            old_attendance = {}
+            return {}
+    except Exception as e:
+        print(f"Error fetching attendance for {reg_no}: {e}")
+        return {}
 
-        updated_data = {}
-
-        for student in students:
-            reg = student["register_num"]
-            chat_id = student["chat_id"]
-
-            logging.info(f"⏱️ Checking attendance for {reg}...")
-            new_data = fetch_attendance(reg)
-
-            if not new_data:
-                logging.info(f"❌ Failed for {reg}")
+# ------------------- ATTENDANCE MONITOR ----------------
+def attendance_monitor(updater):
+    while True:
+        print("⏱️ Checking attendance...")
+        old_data = load_json(DATA_FILE)
+        students = load_json(STUDENTS_FILE)
+        for chat_id, info in students.items():
+            reg_no = info["reg_no"]
+            attendance = fetch_attendance(reg_no)
+            if not attendance:
                 continue
 
-            old_data = old_attendance.get(reg)
-            check_alerts(bot, chat_id, reg, old_data, new_data)
-            updated_data[reg] = new_data
+            dropped_subjects = []
+            for code in HIGHLIGHTED_SUBJECTS:
+                old_val = old_data.get(reg_no, {}).get(code)
+                new_val = attendance.get(code)
+                if old_val is not None and new_val is not None and new_val < old_val:
+                    dropped_subjects.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
 
-        with open(ATTENDANCE_FILE, "w") as f:
-            json.dump(updated_data, f, indent=4)
+            overall = attendance.get("OVERALL", 100)
+            messages = []
+            if overall <= 75:
+                messages.append(f"🚨 Your overall attendance is below 75%: {overall:.2f}%")
+            elif overall <= 80:
+                messages.append(f"⚠️ Your overall attendance is near 75%: {overall:.2f}%")
 
-        logging.info("✅ Attendance check complete. Sleeping 10 mins...\n")
+            if dropped_subjects:
+                messages.append("📉 Attendance dropped in:")
+                messages.extend([f"• {s}" for s in dropped_subjects])
+                messages.append(f"📊 Overall: {overall:.2f}%")
+
+            if messages:
+                messages.insert(0, f"Dear Student ({reg_no}),")
+                send_message(chat_id, "\n".join(messages), context=updater.bot)
+
+            old_data[reg_no] = attendance
+        save_json(DATA_FILE, old_data)
+        print("⏱️ Attendance check complete. Sleeping 10 mins...")
         time.sleep(CHECK_INTERVAL)
 
-# ==================== TELEGRAM COMMANDS ====================
+# ------------------- TELEGRAM HANDLERS ----------------
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text("👋 Hey there! Please send your register number to subscribe for attendance alerts.\nExample: 810722104107")
+    chat_id = update.effective_chat.id
+    send_message(chat_id, "Hi! Please enter your CARE register number to subscribe for attendance alerts.")
 
 def handle_message(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
     text = update.message.text.strip()
-    chat_id = update.message.chat_id
 
-    if text.isdigit() and len(text) == 12:
-        register_num = text
-        students = load_students()
-        if any(s["register_num"] == register_num for s in students):
-            update.message.reply_text("✅ You are already subscribed for attendance alerts!")
-        else:
-            save_student(register_num, chat_id)
-            update.message.reply_text(f"🎉 You are subscribed for attendance alerts, {register_num}!")
-        return
-
-    update.message.reply_text("❌ Invalid input. Please send your *register number* only.")
-
-def attendance(update: Update, context: CallbackContext):
-    chat_id = update.message.chat_id
-    students = load_students()
-    student = next((s for s in students if str(s["chat_id"]) == str(chat_id)), None)
-
+    student = get_student(chat_id)
     if not student:
-        update.message.reply_text("❌ You are not subscribed yet. Please send your register number first.")
+        if text.startswith("8107"):  # register number format
+            register_student(chat_id, text)
+            send_message(chat_id, "✅ You are subscribed for attendance alerts!")
+        else:
+            send_message(chat_id, "⚠️ Invalid register number. Must start with 8107.")
         return
 
-    reg = student["register_num"]
-    update.message.reply_text("⏳ Fetching your current attendance...")
-    data = fetch_attendance(reg)
-
-    if not data:
-        update.message.reply_text("⚠️ Could not fetch attendance. Try again later.")
+def attendance_command(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    student = get_student(chat_id)
+    if not student:
+        send_message(chat_id, "⚠️ You are not registered yet. Use /start to subscribe first.")
         return
-
-    overall = data.get("OVERALL", 0)
+    reg_no = student["reg_no"]
+    attendance = fetch_attendance(reg_no)
+    if not attendance:
+        send_message(chat_id, "⚠️ Could not fetch attendance. Try again later.")
+        return
+    overall = attendance.get("OVERALL", 100)
+    messages = []
     if overall <= 75:
-        msg = f"🚨 Your overall attendance is {overall}%. Below 75%! Please attend classes regularly."
+        messages.append(f"🚨 Your overall attendance is below 75%: {overall:.2f}%")
     elif overall <= 80:
-        msg = f"⚠️ Your overall attendance is {overall}%. Near 75%. Be careful!"
-    else:
-        msg = f"✅ Your overall attendance is {overall}%"
+        messages.append(f"⚠️ Your overall attendance is near 75%: {overall:.2f}%")
+    # Check drops
+    old_data = load_json(DATA_FILE)
+    dropped_subjects = []
+    for code in HIGHLIGHTED_SUBJECTS:
+        old_val = old_data.get(reg_no, {}).get(code)
+        new_val = attendance.get(code)
+        if old_val is not None and new_val is not None and new_val < old_val:
+            dropped_subjects.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
+    if dropped_subjects:
+        messages.append("📉 Attendance dropped in:")
+        messages.extend([f"• {s}" for s in dropped_subjects])
+    messages.append(f"📊 Overall: {overall:.2f}%")
+    send_message(chat_id, "\n".join(messages), context=context)
 
-    update.message.reply_text(msg)
-
-# ==================== MAIN ====================
-def telegram_listener():
-    updater = Updater(BOT_TOKEN, use_context=True)
+# ------------------- MAIN ----------------
+if __name__ == "__main__":
+    updater = Updater(token=BOT_TOKEN)
     dp = updater.dispatcher
 
+    # Commands
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("attendance", attendance))
-    dp.add_handler(MessageHandler(None, handle_message))
+    dp.add_handler(CommandHandler("attendance", attendance_command))
 
+    # Handle user messages (register number input)
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Start attendance monitor in background
+    threading.Thread(target=attendance_monitor, args=(updater,), daemon=True).start()
+
+    # Start Telegram bot
+    print("📡 Bot live! Listening for commands...")
     updater.start_polling()
     updater.idle()
-
-# ==================== RUN BOTH THREADS ====================
-if __name__ == "__main__":
-    t1 = threading.Thread(target=telegram_listener)
-    t2 = threading.Thread(target=attendance_monitor)
-    t1.start()
-    t2.start()

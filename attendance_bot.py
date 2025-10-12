@@ -6,6 +6,7 @@ import os
 import threading
 from datetime import datetime
 
+# ------------------ CONFIG ------------------
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
@@ -13,17 +14,17 @@ OFFSET_FILE = "offset.txt"
 HIGHLIGHTED_SUBJECTS = ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"]
 admin_chat_id = "1718437414"
 
+# ------------------ STATE ------------------
 pending_usernames = {}
-changing_password = {}
 broadcast_mode = {}
 
+# ------------------ UTILS ------------------
 def normalize_id(x):
     try:
         return str(x).strip()
     except:
         return ""
 
-# ------------------ Offset Handling ------------------
 def load_offset():
     if os.path.exists(OFFSET_FILE):
         with open(OFFSET_FILE, "r") as f:
@@ -37,7 +38,7 @@ def save_offset(offset):
     with open(OFFSET_FILE, "w") as f:
         f.write(str(offset))
 
-# ------------------ Logging ------------------
+# ------------------ LOGGING ------------------
 CHAT_HISTORY_FILE = "chat_history.csv"
 def log_chat_interaction(chat_id, username, message_text):
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -48,11 +49,10 @@ def log_chat_interaction(chat_id, username, message_text):
             if not file_exists:
                 writer.writerow(["timestamp", "chat_id", "username", "message_text"])
             writer.writerow([timestamp, chat_id, username, message_text])
-        print(f"Logged chat: {timestamp} - {chat_id} - {username} - {message_text}")
-    except Exception as e:
-        print(f"Error logging chat: {e}")
+    except:
+        pass
 
-# ------------------ Telegram API ------------------
+# ------------------ TELEGRAM API ------------------
 def get_updates(offset):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"timeout": 100}
@@ -65,8 +65,7 @@ def get_updates(offset):
             offset = data[-1]["update_id"] + 1
             save_offset(offset)
         return data, offset
-    except Exception as e:
-        print(f"❌ Error in get_updates: {e}")
+    except:
         return [], offset
 
 def send_message(chat_id, text):
@@ -74,8 +73,8 @@ def send_message(chat_id, text):
     payload = {"chat_id": chat_id, "text": text}
     try:
         requests.post(url, data=payload, timeout=10)
-    except Exception as e:
-        print(f"❌ Failed to send message: {e}")
+    except:
+        pass
 
 def broadcast_to_all(message):
     students = load_students()
@@ -83,13 +82,10 @@ def broadcast_to_all(message):
     for student in students:
         chat_id = normalize_id(student.get("chat_id", ""))
         if chat_id and chat_id not in sent_to:
-            try:
-                send_message(chat_id, f"📢 Admin Message:\n{message}")
-                sent_to.add(chat_id)
-            except Exception as e:
-                print(f"❌ Failed to send to {chat_id}: {e}")
+            send_message(chat_id, f"📢 Admin Message:\n{message}")
+            sent_to.add(chat_id)
 
-# ------------------ Student Management ------------------
+# ------------------ STUDENT MANAGEMENT ------------------
 def load_students():
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
@@ -137,10 +133,9 @@ def add_or_update_student(chat_id, username, name):
             "chat_id": chat_id
         })
     save_students(students)
-    send_message(chat_id, f"✅ You are now registered successfully, {name}!")
-    print(f"[INFO] Registered/Updated: username={username}, chat_id={chat_id}, name={name}")
+    send_message(chat_id, f"✅ You are now registered successfully, {name}!\n✅ You are subscribed for attendance alerts! Use /attendance to check your current status anytime.")
 
-# ------------------ Attendance ------------------
+# ------------------ ATTENDANCE ------------------
 def load_old_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
@@ -161,7 +156,6 @@ def fetch_attendance(username):
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
         response = requests.post(url, json=payload, headers=headers, timeout=20)
         data = response.json()
-
         if data.get("success"):
             attendance_list = data["result"]["attendance"]
             attendance_dict = {}
@@ -169,21 +163,16 @@ def fetch_attendance(username):
                 sub_code = sub["sub_code"]
                 perc = float(sub["attendance_percentage"])
                 attendance_dict[sub_code] = perc
-
-            # Calculate overall for highlighted subjects
             overall_list = [attendance_dict[s] for s in HIGHLIGHTED_SUBJECTS if s in attendance_dict]
             attendance_dict["OVERALL"] = sum(overall_list) / len(overall_list) if overall_list else 100.0
             return attendance_dict
         else:
-            print("❌ API returned error:", data.get("message"))
             return {}
-    except Exception as e:
-        print("❌ Error fetching attendance via API:", e)
+    except:
         return {}
 
-# ------------------ Telegram Listener ------------------
+# ------------------ TELEGRAM LISTENER ------------------
 def telegram_listener():
-    print("📡 Bot is live. Listening for /start, /attendance, and admin commands...")
     offset = load_offset()
     while True:
         updates, offset = get_updates(offset)
@@ -194,22 +183,7 @@ def telegram_listener():
             name = message.get("chat", {}).get("first_name", "User")
             log_chat_interaction(chat_id, name, text)
 
-            # Admin broadcast
-            if chat_id == admin_chat_id:
-                if text == "/broadcast":
-                    send_message(chat_id, "📢 Enter message to broadcast to all users:")
-                    broadcast_mode[chat_id] = True
-                    continue
-                elif broadcast_mode.get(chat_id):
-                    broadcast_to_all(text)
-                    send_message(chat_id, "✅ Broadcast sent successfully.")
-                    broadcast_mode.pop(chat_id)
-                    continue
-            elif text == "/broadcast":
-                send_message(chat_id, "❌ You are not authorized.")
-                continue
-
-            # /start Registration
+            # /start registration
             if text == "/start":
                 existing = get_student_by_chat_id(chat_id)
                 if existing:
@@ -219,7 +193,7 @@ def telegram_listener():
                 pending_usernames[chat_id] = True
                 continue
 
-            # Handle register number
+            # handle register number
             if pending_usernames.get(chat_id):
                 if text.startswith("8107") and len(text) >= 6:
                     pending_usernames.pop(chat_id, None)
@@ -239,23 +213,36 @@ def telegram_listener():
                 if not attendance_data:
                     send_message(chat_id, "⚠️ Could not fetch attendance. Try again later.")
                     continue
-                overall = attendance_data.get("OVERALL")
-                if overall is not None:
-                    send_message(chat_id, f"✅ Your overall attendance is {overall:.2f}%")
-                else:
-                    send_message(chat_id, "⚠️ Attendance data not found.")
+                # Compare with old data
+                old_data = load_old_data()
+                username = student["username"]
+                old_attendance = old_data.get(username, {})
+                dropped_subjects = []
+                for code in HIGHLIGHTED_SUBJECTS:
+                    old_val = old_attendance.get(code)
+                    new_val = attendance_data.get(code)
+                    if old_val is not None and new_val is not None and new_val < old_val:
+                        dropped_subjects.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
+                # Overall alerts
+                overall = attendance_data.get("OVERALL", 100)
+                lines = []
+                if overall < 75:
+                    lines.append("🚨 Your overall attendance is below 75%. Please improve.")
+                elif overall < 80:
+                    lines.append("⚠️ Warning! Your overall attendance is near 75%.")
+                if dropped_subjects:
+                    lines.append("📉 Attendance dropped in:")
+                    lines.extend([f"• {s}" for s in dropped_subjects])
+                lines.append(f"📊 Overall: {overall:.2f}%")
+                send_message(chat_id, "\n".join(lines))
+                # Save new data
+                old_data[username] = attendance_data
+                save_new_data(old_data)
                 continue
 
-            # Unknown command
-            if text.startswith("/"):
-                send_message(chat_id, "⚠️ Unknown command.")
-                continue
-            send_message(chat_id, "⚠️ Don’t send unwanted messages!")
-
-# ------------------ Automatic Attendance Monitor ------------------
+# ------------------ ATTENDANCE MONITOR ------------------
 def attendance_monitor():
     while True:
-        print("⏱️ Running attendance check...")
         old_data = load_old_data()
         students = load_students()
         for student in students:
@@ -284,14 +271,12 @@ def attendance_monitor():
                     lines.append("📉 Attendance dropped in:")
                     lines.extend([f"• {s}" for s in dropped_subjects])
                 lines.append(f"📊 Overall: {overall:.2f}%")
-                message = "\n".join(lines)
-                send_message(chat_id, message)
+                send_message(chat_id, "\n".join(lines))
             old_data[username] = attendance
         save_new_data(old_data)
-        print("⏱️ Attendance check complete. Sleeping 10 mins...")
-        time.sleep(600)
+        time.sleep(600)  # check every 10 mins
 
-# ------------------ Main ------------------
+# ------------------ MAIN ------------------
 if __name__ == "__main__":
     threading.Thread(target=telegram_listener, daemon=True).start()
     threading.Thread(target=attendance_monitor, daemon=True).start()

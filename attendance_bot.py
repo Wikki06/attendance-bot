@@ -118,19 +118,23 @@ def fetch_attendance(username):
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
         response = requests.post(url, json=payload, headers=headers, timeout=20)
         data = response.json()
-        if data.get("success"):
+
+        if data.get("success") and "result" in data and "attendance" in data["result"]:
             attendance_list = data["result"]["attendance"]
             attendance_dict = {}
             for sub in attendance_list:
-                sub_code = sub["sub_code"]
-                perc = float(sub["attendance_percentage"])
-                attendance_dict[sub_code] = perc
+                sub_code = sub.get("sub_code")
+                perc = float(sub.get("attendance_percentage", 0))
+                if sub_code:
+                    attendance_dict[sub_code] = perc
+
             overall_list = [attendance_dict[s] for s in HIGHLIGHTED_SUBJECTS if s in attendance_dict]
-            attendance_dict["OVERALL"] = sum(overall_list) / len(overall_list) if overall_list else 100.0
+            attendance_dict["OVERALL"] = sum(overall_list) / len(overall_list) if overall_list else None
             return attendance_dict
         else:
             return {}
-    except:
+    except Exception as e:
+        print("Error fetching attendance:", e)
         return {}
 
 # ------------------ Admin Broadcast ------------------
@@ -216,9 +220,10 @@ def telegram_listener():
                     continue
                 send_message(chat_id, "⏳ Fetching your attendance...")
                 attendance_data = fetch_attendance(student["username"])
-                if not attendance_data:
-                    send_message(chat_id, "⚠️ Could not fetch attendance. Try later.")
+                if not attendance_data or "OVERALL" not in attendance_data:
+                    send_message(chat_id, "⚠️ Could not fetch attendance. Please check your CARE number.")
                     continue
+
                 overall = attendance_data.get("OVERALL")
                 dropped_subjects = []
                 old_data = load_old_data()
@@ -266,7 +271,7 @@ def attendance_monitor():
             if not chat_id or not username:
                 continue
             attendance = fetch_attendance(username)
-            if not attendance:
+            if not attendance or "OVERALL" not in attendance:
                 continue
 
             dropped_subjects = []
@@ -276,7 +281,10 @@ def attendance_monitor():
                 if old_val is not None and new_val is not None and new_val < old_val:
                     dropped_subjects.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
 
-            overall = attendance.get("OVERALL", 100)
+            overall = attendance.get("OVERALL")
+            if overall is None:
+                continue
+
             if overall < 80 or dropped_subjects:
                 lines = [f"Dear {name},"]
 

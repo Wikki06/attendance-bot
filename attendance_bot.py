@@ -162,7 +162,6 @@ def telegram_listener():
                     send_message(chat_id, "❌ You are not authorized to use this command.")
                     continue
                 try:
-                    # Example usage: /remove_user wrongusername
                     username_to_delete = text.split()[1]
                     students = load_students()
                     if username_to_delete not in [s["username"] for s in students]:

@@ -112,16 +112,12 @@ def save_new_data(data):
         json.dump(data, f)
 
 def fetch_attendance(username):
-    """
-    Fetch attendance via API.
-    """
     try:
         url = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
         payload = {"register_num": username, "function": "sva"}
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
         response = requests.post(url, json=payload, headers=headers, timeout=20)
         data = response.json()
-
         if data.get("success"):
             attendance_list = data["result"]["attendance"]
             attendance_dict = {}
@@ -129,7 +125,6 @@ def fetch_attendance(username):
                 sub_code = sub["sub_code"]
                 perc = float(sub["attendance_percentage"])
                 attendance_dict[sub_code] = perc
-
             overall_list = [attendance_dict[s] for s in HIGHLIGHTED_SUBJECTS if s in attendance_dict]
             attendance_dict["OVERALL"] = sum(overall_list) / len(overall_list) if overall_list else 100.0
             return attendance_dict
@@ -160,6 +155,25 @@ def telegram_listener():
             name = message.get("chat", {}).get("first_name", "User")
 
             log_chat_interaction(chat_id, name, text)
+
+            # ------------------ Delete wrong username (Admin only) ------------------
+            if text.startswith("/remove_user"):
+                if chat_id != admin_chat_id:
+                    send_message(chat_id, "❌ You are not authorized to use this command.")
+                    continue
+                try:
+                    # Example usage: /remove_user wrongusername
+                    username_to_delete = text.split()[1]
+                    students = load_students()
+                    if username_to_delete not in [s["username"] for s in students]:
+                        send_message(chat_id, f"❌ Username '{username_to_delete}' not found!")
+                    else:
+                        students = [s for s in students if s["username"] != username_to_delete]
+                        save_students(students)
+                        send_message(chat_id, f"✅ Username '{username_to_delete}' has been removed successfully!")
+                except IndexError:
+                    send_message(chat_id, "⚠️ Usage: /remove_user <username>")
+                continue
 
             # Admin broadcast
             if chat_id == admin_chat_id:
@@ -301,7 +315,6 @@ def get_updates(offset):
 
 # ------------------ Main ------------------
 if __name__ == "__main__":
-    # Only one thread for listener
     threading.Thread(target=telegram_listener, daemon=True).start()
     threading.Thread(target=attendance_monitor, daemon=True).start()
     while True:

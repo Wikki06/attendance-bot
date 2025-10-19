@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Telegram attendance bot (clean copy).
+Telegram attendance bot (clean copy with agreement and fixed drop alert).
 Features:
- - /start registration (register number, department, year)
+ - /start registration (agreement, register number, department, year)
  - /attendance -> fetches attendance for mapped subjects and replies
  - Background attendance_monitor -> periodic checks & alerts
- - Uses CARE internal API endpoint to fetch attendance
 """
 
 import os
@@ -18,23 +17,18 @@ from datetime import datetime
 
 # ------------- CONFIG -------------
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"  # replace if needed
-ADMIN_CHAT_ID = "1718437414"  # admin for broadcasts
+ADMIN_CHAT_ID = "1718437414"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
 OFFSET_FILE = "offset.txt"
 
-# Add or edit mappings: (DEPT, YEAR) -> [subject_codes...]
 SUBJECT_MAP = {
     ("CSE", "IV"): ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"],
     ("CSE", "III"): ["CS3351", "CS3352", "CS3353"],
     ("ECE", "IV"): ["EC4001", "EC4002", "EC4003"],
-    # extend as needed
 }
 
-# CARE student API endpoint (used by their frontend)
 CARE_API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
-
-# Polling interval for attendance monitor (seconds)
 MONITOR_INTERVAL = 10 * 60  # 10 minutes
 
 # ------------- UTILITIES -------------
@@ -45,10 +39,11 @@ def log(msg):
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     print(f"[{ts}] {msg}")
 
-# ------------- TELEGRAM API -------------
-def send_message(chat_id: str, text: str):
+def send_message(chat_id: str, text: str, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     try:
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
@@ -120,7 +115,6 @@ def get_student_by_chat_id(chat_id):
     return None
 
 def add_or_update_student_record(chat_id, username, name, department, year):
-    """Add (or update) a student record in CSV. department & year are stored normalized."""
     students = load_students()
     username = username.strip()
     department = (department or "").strip().upper()
@@ -130,29 +124,16 @@ def add_or_update_student_record(chat_id, username, name, department, year):
     updated = False
     for s in students:
         if s["username"] == username:
-            s["name"] = name
-            s["chat_id"] = chat_id
-            s["department"] = department
-            s["year"] = year
+            s.update({"name": name, "chat_id": chat_id, "department": department, "year": year})
             updated = True
             break
     if not updated:
-        students.append({
-            "username": username,
-            "name": name,
-            "chat_id": chat_id,
-            "department": department,
-            "year": year
-        })
+        students.append({"username": username, "name": name, "chat_id": chat_id, "department": department, "year": year})
     save_students(students)
     log(f"Saved student: {username} | {name} | {department} | {year} | chat:{chat_id}")
 
-# ------------- ATTENDANCE FETCH (API) -------------
+# ------------- ATTENDANCE FETCH -------------
 def fetch_attendance_api(register_num):
-    """
-    Calls CARE internal API (used by attendance.js) to fetch attendance JSON.
-    Returns dict {sub_code: percent, ... , 'OVERALL': value} or {} on error.
-    """
     try:
         payload = {"register_num": register_num, "function": "sva"}
         headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
@@ -160,9 +141,8 @@ def fetch_attendance_api(register_num):
         r.raise_for_status()
         data = r.json()
         if data.get("success") and "result" in data and "attendance" in data["result"]:
-            attendance_list = data["result"]["attendance"]
             attendance = {}
-            for item in attendance_list:
+            for item in data["result"]["attendance"]:
                 code = (item.get("sub_code") or "").strip()
                 try:
                     val = float(item.get("attendance_percentage") or 0)
@@ -178,14 +158,8 @@ def fetch_attendance_api(register_num):
         return {}
 
 def compute_overall_for_subjects(attendance_dict, subjects):
-    """Compute average of attendance_dict for the specific subjects list."""
-    vals = []
-    for s in subjects:
-        # match exact subject code; you might want to normalize both sides if codes vary
-        if s in attendance_dict:
-            vals.append(attendance_dict[s])
-    if not vals:
-        return None
+    vals = [attendance_dict[s] for s in subjects if s in attendance_dict]
+    if not vals: return None
     return round(sum(vals) / len(vals), 2)
 
 # ------------- BACKGROUND MONITOR -------------
@@ -203,7 +177,6 @@ def save_new_data(data):
         json.dump(data, f, indent=2)
 
 def attendance_monitor():
-    """Periodically fetch attendance for all registered students and notify if needed."""
     log("Attendance monitor started.")
     while True:
         try:
@@ -215,63 +188,48 @@ def attendance_monitor():
                 name = st.get("name")
                 dept = st.get("department")
                 year = st.get("year")
-                if not username or not chat_id:
-                    continue
+                if not username or not chat_id: continue
 
                 subjects = SUBJECT_MAP.get((dept, year), [])
-                if not subjects:
-                    # no mapping for this student; skip
-                    continue
+                if not subjects: continue
 
                 att = fetch_attendance_api(username)
-                if not att:
-                    log(f"No attendance returned for {username}")
-                    continue
+                if not att: continue
 
-                # Compute the OVERALL restricted to subjects mapping
                 overall = compute_overall_for_subjects(att, subjects)
-                if overall is not None:
-                    att["OVERALL"] = overall
+                if overall is not None: att["OVERALL"] = overall
 
-                # check drops compared to old_data
                 dropped = []
                 prev = old_data.get(username, {})
                 for code in subjects:
                     old_val = prev.get(code)
                     new_val = att.get(code)
-                    if old_val is not None and new_val is not None and new_val < old_val:
-                        dropped.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
+                    if old_val is not None and new_val is not None:
+                        if new_val < old_val - 0.01:  # only real drop
+                            dropped.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
 
-                # Alert conditions
                 if (att.get("OVERALL") is not None and att["OVERALL"] < 80) or dropped:
                     lines = [f"Dear {name},"]
                     if att.get("OVERALL") is not None:
-                        if att["OVERALL"] < 75:
-                            lines.append(f"🚨 Overall attendance below 75% ({att['OVERALL']:.2f}%)")
-                        elif att["OVERALL"] < 80:
-                            lines.append(f"⚠️ Overall attendance near 75% ({att['OVERALL']:.2f}%)")
+                        if att["OVERALL"] < 75: lines.append(f"🚨 Overall below 75% ({att['OVERALL']:.2f}%)")
+                        elif att["OVERALL"] < 80: lines.append(f"⚠️ Overall near 75% ({att['OVERALL']:.2f}%)")
                     if dropped:
                         lines.append("📉 Attendance dropped in:")
                         lines.extend([f"• {d}" for d in dropped])
-                    # Provide summary of the mapped subjects
                     lines.append("\n📊 Current highlighted subjects:")
                     for code in subjects:
-                        if code in att:
-                            lines.append(f"• {code}: {att[code]:.2f}%")
-                    msg = "\n".join(lines)
-                    send_message(chat_id, msg)
+                        if code in att: lines.append(f"• {code}: {att[code]:.2f}%")
+                    send_message(chat_id, "\n".join(lines))
                     log(f"Alert sent to {username} ({chat_id})")
 
-                # save latest attendance snapshot
-                old_data[username] = {k: v for k, v in att.items() if k != "OVERALL" or True}
+                # save snapshot for next comparison
+                old_data[username] = {k: v for k, v in att.items() if k != "OVERALL"}
             save_new_data(old_data)
         except Exception as e:
             log(f"attendance_monitor loop error: {e}")
-        log(f"Sleeping for {MONITOR_INTERVAL} seconds...")
         time.sleep(MONITOR_INTERVAL)
 
-# ------------- TELEGRAM LISTENER (MAIN BOT) -------------
-# pending registration state per chat: { chat_id: {"step": "regno"/"dept"/"year", ...} }
+# ------------- TELEGRAM LISTENER -------------
 pending_registration = {}
 
 def telegram_listener():
@@ -285,44 +243,37 @@ def telegram_listener():
             chat = message.get("chat", {}) or {}
             chat_id = normalize_id(chat.get("id", ""))
             name = (chat.get("first_name") or "Student").strip()
-
             log(f"Incoming from {chat_id}: {text}")
 
-            # Admin broadcast handling
-            if chat_id == ADMIN_CHAT_ID and text == "/broadcast":
-                send_message(chat_id, "Send the broadcast text now:")
-                pending_registration[chat_id] = {"step": "broadcast_text"}
-                continue
-            if chat_id == ADMIN_CHAT_ID and pending_registration.get(chat_id, {}).get("step") == "broadcast_text":
-                broadcast_text = text
-                # simple broadcast: loop users and send
-                for s in load_students():
-                    target = s.get("chat_id")
-                    if target:
-                        send_message(target, f"📢 Admin: {broadcast_text}")
-                send_message(chat_id, "Broadcast sent.")
-                pending_registration.pop(chat_id, None)
-                continue
-
-            # Start registration flow
+            # Start agreement step
             if text == "/start":
                 existing = get_student_by_chat_id(chat_id)
                 if existing:
-                    send_message(chat_id, f"✅ Already registered as {existing.get('name')}. Use /attendance to fetch.")
+                    send_message(chat_id, f"✅ Already registered as {existing.get('name')}. Use /attendance.")
                     continue
-                send_message(chat_id, "Hi! Enter your CARE Register Number (must start with 8107):")
-                pending_registration[chat_id] = {"step": "regno"}
+                send_message(chat_id, f"Hi {name}! Before registration, please agree to company policies. Do you agree?", 
+                             reply_markup={"inline_keyboard":[[{"text":"Agree","callback_data":"agree"},{"text":"Disagree","callback_data":"disagree"}]]})
+                pending_registration[chat_id] = {"step":"agreement"}
                 continue
 
-            # If user in registration flow
+            # Handle agreement button clicks (via text fallback)
             if chat_id in pending_registration:
                 state = pending_registration[chat_id]
                 step = state.get("step")
+                if step == "agreement":
+                    if text.lower() == "agree":
+                        state["step"] = "regno"
+                        send_message(chat_id, "Great! Enter your CARE Register Number (must start with 8107):")
+                        continue
+                    else:
+                        send_message(chat_id, "⚠️ You must agree to continue registration.")
+                        pending_registration.pop(chat_id, None)
+                        continue
 
-                # extra: admin broadcast step handled above
+                # Registration steps
                 if step == "regno":
                     if not text.startswith("8107"):
-                        send_message(chat_id, "⚠️ Invalid register number. It should start with 8107. Try again.")
+                        send_message(chat_id, "⚠️ Invalid register number. Try again.")
                         continue
                     state["regno"] = text
                     state["step"] = "dept"
@@ -337,9 +288,8 @@ def telegram_listener():
 
                 if step == "year":
                     state["year"] = text.strip().upper()
-                    # finalize registration
                     add_or_update_student_record(chat_id, state["regno"], name, state["department"], state["year"])
-                    send_message(chat_id, "You are registered. Use /attendance to fetch your attendance anytime.")
+                    send_message(chat_id, "✅ Registered! Use /attendance to fetch your attendance anytime.")
                     pending_registration.pop(chat_id, None)
                     continue
 
@@ -347,74 +297,38 @@ def telegram_listener():
             if text == "/attendance":
                 student = get_student_by_chat_id(chat_id)
                 if not student:
-                    send_message(chat_id, "⚠️ You are not registered. Use /start to register first.")
+                    send_message(chat_id, "⚠️ Not registered. Use /start.")
                     continue
-
                 subjects = SUBJECT_MAP.get((student.get("department"), student.get("year")), [])
                 if not subjects:
-                    send_message(chat_id, "⚠️ No subject mapping available for your department/year. Contact admin.")
+                    send_message(chat_id, "⚠️ No subject mapping. Contact admin.")
                     continue
-
                 send_message(chat_id, "⏳ Fetching your attendance, please wait...")
                 att = fetch_attendance_api(student["username"])
                 if not att:
-                    send_message(chat_id, "⚠️ Could not fetch attendance right now. Try again later.")
+                    send_message(chat_id, "⚠️ Could not fetch attendance. Try later.")
                     continue
-
                 overall = compute_overall_for_subjects(att, subjects)
-                # build message
                 lines = [f"📊 Attendance for {student.get('name')} ({student.get('department')} {student.get('year')}):"]
                 for code in subjects:
-                    if code in att:
-                        lines.append(f"• {code}: {att[code]:.2f}%")
-                    else:
-                        lines.append(f"• {code}: N/A")
-                if overall is not None:
-                    lines.append(f"\nOVERALL (highlighted): {overall:.2f}%")
-                    if overall < 75:
-                        lines.append("🚨 Overall below 75% — please improve.")
-                    elif overall < 80:
-                        lines.append("⚠️ Overall near 75% — caution.")
-                else:
-                    lines.append("\nOVERALL: N/A")
+                    lines.append(f"• {code}: {att.get(code,'N/A') if code in att else 'N/A'}")
+                if overall: 
+                    lines.append(f"\nOVERALL: {overall:.2f}%")
                 send_message(chat_id, "\n".join(lines))
                 continue
 
-            # Admin remove user
-            if text.startswith("/remove_user"):
-                if chat_id != ADMIN_CHAT_ID:
-                    send_message(chat_id, "❌ You are not authorized.")
-                    continue
-                parts = text.split()
-                if len(parts) < 2:
-                    send_message(chat_id, "Usage: /remove_user <register_number>")
-                    continue
-                tgt = parts[1].strip()
-                students = load_students()
-                filtered = [s for s in students if s.get("username") != tgt]
-                save_students(filtered)
-                send_message(chat_id, f"✅ Removed {tgt} (if existed).")
-                continue
-
-            # Unknown / fallback
+            # Unknown
             if text.startswith("/"):
-                send_message(chat_id, "⚠️ Unknown command. Use /start to register or /attendance to fetch.")
+                send_message(chat_id, "⚠️ Unknown command. Use /start or /attendance.")
                 continue
-            send_message(chat_id, "⚠️ Invalid input. Use /start to register or /attendance to fetch.")
+            send_message(chat_id, "⚠️ Invalid input. Use /start or /attendance.")
 
 # ------------- MAIN -------------
 if __name__ == "__main__":
-    # start background monitor
-    monitor_thread = threading.Thread(target=attendance_monitor, daemon=True)
-    monitor_thread.start()
-
-    # start telegram listener
-    listener_thread = threading.Thread(target=telegram_listener, daemon=True)
-    listener_thread.start()
-
+    threading.Thread(target=attendance_monitor, daemon=True).start()
+    threading.Thread(target=telegram_listener, daemon=True).start()
     log("Bot started. Press Ctrl+C to stop.")
     try:
-        while True:
-            time.sleep(10)
+        while True: time.sleep(10)
     except KeyboardInterrupt:
         log("Shutting down...")

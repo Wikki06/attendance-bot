@@ -238,12 +238,32 @@ def telegram_listener():
     while True:
         updates, offset = get_updates(offset)
         for update in updates:
+            # handle callback queries (button clicks)
+            callback = update.get("callback_query")
+            if callback:
+                chat_id = normalize_id(callback["from"]["id"])
+                data = callback.get("data")
+                name = callback["from"].get("first_name", "Student")
+                state = pending_registration.get(chat_id)
+                if state and state.get("step") == "agreement":
+                    if data == "agree":
+                        state["step"] = "regno"
+                        send_message(chat_id, "Great! Enter your CARE Register Number (must start with 8107):")
+                    else:
+                        send_message(chat_id, "⚠️ You must agree to continue registration.")
+                        pending_registration.pop(chat_id, None)
+                # answer callback to remove loading state
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", data={"callback_query_id": callback["id"]})
+                continue
+
             message = update.get("message", {}) or {}
             text = (message.get("text") or "").strip()
             chat = message.get("chat", {}) or {}
             chat_id = normalize_id(chat.get("id", ""))
             name = (chat.get("first_name") or "Student").strip()
-            log(f"Incoming from {chat_id}: {text}")
+            
+            # rest of listener as before ...
+
 
             # Start agreement step
             if text == "/start":

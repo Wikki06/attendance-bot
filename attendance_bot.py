@@ -271,7 +271,10 @@ def telegram_listener():
                 if existing:
                     send_message(chat_id, f"✅ Already registered as {existing.get('name')}. Use /attendance.")
                     continue
-                send_message(chat_id, f"Hi {name}! Before registration, please agree to company policies. Do you agree?", 
+                send_message(chat_id, f"Hi {name}! Before we proceed:
+				We collect your attendance & marks solely for academic tracking.
+				By clicking Agree ✅, you accept our policy & data usage rules.
+				Click Disagree ❌ to cancel.", 
                              reply_markup={"inline_keyboard":[[{"text":"Agree","callback_data":"agree"},{"text":"Disagree","callback_data":"disagree"}]]})
                 pending_registration[chat_id] = {"step":"agreement"}
                 continue

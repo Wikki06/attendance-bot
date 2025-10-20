@@ -27,19 +27,16 @@ MONITOR_INTERVAL = 10 * 60  # every 10 mins
 
 SUBJECT_MAP = {
     ("CSE", "IV"): ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"],
-    ("CSE", "III"): ["CS3591", "CS3501", "CB3491","CS3551","CCS375","CCS341"],
+    ("CSE", "III"): ["CS3351", "CS3352", "CS3353"],
     ("ECE", "IV"): ["EC4001", "EC4002", "EC4003"],
 }
-
 
 # ---------------- UTILITIES ----------------
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-
 def normalize_id(x):
     return str(x).strip()
-
 
 def send_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -50,7 +47,6 @@ def send_message(chat_id, text, reply_markup=None):
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
         log(f"send_message error: {e}")
-
 
 def get_updates(offset):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
@@ -68,7 +64,6 @@ def get_updates(offset):
         log(f"get_updates error: {e}")
         return [], offset
 
-
 # ---------------- STUDENT STORAGE ----------------
 def ensure_csv():
     if not os.path.exists(CSV_FILE):
@@ -76,12 +71,10 @@ def ensure_csv():
             writer = csv.DictWriter(f, fieldnames=["username", "name", "chat_id", "department", "year"])
             writer.writeheader()
 
-
 def load_students():
     ensure_csv()
     with open(CSV_FILE, "r", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
-
 
 def save_students(students):
     with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
@@ -89,20 +82,17 @@ def save_students(students):
         writer.writeheader()
         writer.writerows(students)
 
-
 def get_student_by_chat_id(chat_id):
     for s in load_students():
         if normalize_id(s.get("chat_id")) == normalize_id(chat_id):
             return s
     return None
 
-
 def remove_user(identifier):
     students = load_students()
     new_students = [s for s in students if s["username"] != identifier and s["chat_id"] != identifier]
     save_students(new_students)
     return len(students) - len(new_students)
-
 
 def add_or_update_student(chat_id, username, name, dept, year):
     students = load_students()
@@ -114,7 +104,6 @@ def add_or_update_student(chat_id, username, name, dept, year):
     students.append({"username": username, "name": name, "chat_id": chat_id, "department": dept, "year": year})
     save_students(students)
     log(f"Saved {username} | {name} | {dept} | {year}")
-
 
 # ---------------- ATTENDANCE ----------------
 def fetch_attendance(register_num):
@@ -135,11 +124,9 @@ def fetch_attendance(register_num):
         log(f"fetch_attendance error: {e}")
         return {}
 
-
 def avg_attendance(att, subjects):
     vals = [att[s] for s in subjects if s in att]
     return round(sum(vals) / len(vals), 2) if vals else None
-
 
 # ---------------- MONITOR ----------------
 def load_json():
@@ -148,11 +135,9 @@ def load_json():
             return json.load(f)
     return {}
 
-
 def save_json(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-
 
 def attendance_monitor():
     log("📡 Attendance monitor running...")
@@ -198,10 +183,8 @@ def attendance_monitor():
             log(f"monitor error: {e}")
         time.sleep(MONITOR_INTERVAL)
 
-
 # ---------------- TELEGRAM LISTENER ----------------
 pending = {}
-
 
 def telegram_listener():
     log("💬 Telegram listener running...")
@@ -278,16 +261,20 @@ def telegram_listener():
                 state = pending[chat_id]
                 step = state.get("step")
 
+                log(f"Pending step for chat_id {chat_id}: {step} | Received text: '{text}'")
+
                 if step == "agreement" and text.lower() == "agree":
                     state["step"] = "regno"
                     send_message(chat_id, "✅ Enter your CARE Register Number (starts with 8107):")
                     continue
 
                 if step == "regno":
-                    if not text.startswith("8107"):
+                    regno_input = text.strip()
+                    log(f"Register number input: '{regno_input}'")
+                    if not regno_input.startswith("8107"):
                         send_message(chat_id, "⚠️ Invalid register number. Try again.")
                         continue
-                    state["regno"] = text
+                    state["regno"] = regno_input
                     state["step"] = "dept"
                     send_message(chat_id, "Enter your Department (CSE, ECE, etc):")
                     continue
@@ -335,7 +322,6 @@ def telegram_listener():
                 continue
 
             send_message(chat_id, "🤖 Invalid input. Use /start or /attendance.")
-
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":

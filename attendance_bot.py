@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Telegram Attendance Bot — Full Version (Final Updated)
+Telegram Attendance Bot — Full Version (Admin Fix + Monitoring)
 Features:
 - Policy agreement before registration
 - Student registration (/start)
@@ -8,6 +8,7 @@ Features:
 - Update own info (/updateinfo)
 - Background drop monitoring
 - Admin commands: /broadcast & /remove_user
+- Unauthorized & unwanted message handling
 """
 
 import os
@@ -20,7 +21,7 @@ from datetime import datetime
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
-ADMIN_CHAT_ID = "1718437414"
+ADMIN_CHAT_ID = "1718437414"  # only admin
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
 MONITOR_INTERVAL = 10 * 60  # 10 mins
@@ -166,15 +167,12 @@ def attendance_monitor():
                     new = att.get(sub)
                     if old and new and new < old - 0.01:
                         drops.append(f"{sub}: {old:.2f}% → {new:.2f}%")
-                if overall and (overall < 80 or drops):
+                if drops or (overall and overall < 80):
                     msg = [f"Dear {name},"]
                     if drops:
                         msg.append("📉 Drop detected:")
                         msg += [f"• {d}" for d in drops]
-                    # Only show overall at the end
-                    if overall < 75:
-                        msg.append(f"\n🚨 Overall below 75% ({overall}%)")
-                    else:
+                    if overall:
                         msg.append(f"\nOVERALL: {overall}%")
                     send_message(chat, "\n".join(msg))
                 prev_data[reg] = att
@@ -200,7 +198,7 @@ def telegram_listener():
                 if state and state.get("step") == "agreement":
                     if data == "agree":
                         state["step"] = "regno"
-                        send_message(chat_id, "✅ Great! Enter your CARE Register Number :")
+                        send_message(chat_id, "✅ Great! Enter your CARE Register Number (starts with 8107):")
                     else:
                         send_message(chat_id, "❌ Registration cancelled. Use /start to try again.")
                         pending.pop(chat_id, None)
@@ -216,6 +214,11 @@ def telegram_listener():
             name = msg.get("chat", {}).get("first_name", "Student")
 
             # ---------------- ADMIN COMMANDS ----------------
+            if text.startswith("/broadcast") or text.startswith("/remove_user"):
+                if chat_id != ADMIN_CHAT_ID:
+                    send_message(chat_id, "⚠️ You are not authorized to use this command.")
+                    continue
+
             if chat_id == ADMIN_CHAT_ID and text.startswith("/broadcast "):
                 message = text.replace("/broadcast ", "").strip()
                 if not message:
@@ -241,7 +244,7 @@ def telegram_listener():
                 send_message(
                     chat_id,
                     f"Hi {name}! Before we proceed:\n"
-                    "We collect your attendance & marks from the CARE CRM only for academic tracking.\n"
+                    "We collect your attendance & marks only for academic tracking.\n"
                     "By clicking Agree ✅, you accept our policy & data usage terms.\n"
                     "Click Disagree ❌ to cancel.",
                     reply_markup={
@@ -271,14 +274,14 @@ def telegram_listener():
                         continue
                     state["regno"] = regno_input
                     state["step"] = "dept"
-                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS ):")
+                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS / AI&DS):")
                     continue
 
                 if step == "dept":
                     dept_input = text.upper().replace(" ", "")
                     if dept_input not in VALID_DEPTS:
                         send_message(chat_id,
-                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS ")
+                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
                         continue
                     state["dept"] = dept_input
                     state["step"] = "year"
@@ -356,11 +359,13 @@ def telegram_listener():
                 send_message(chat_id, "\n".join(lines))
                 continue
 
-            if text.startswith("/"):
-                send_message(chat_id, "⚠️ Unknown command. Use /start, /attendance, or /updateinfo.")
+            # ---------------- RANDOM MESSAGES ----------------
+            if not text.startswith("/"):
+                send_message(chat_id, "🤖 Don’t send unwanted messages, you are being monitored!")
                 continue
 
-            send_message(chat_id, "🤖 Invalid input. Use /start, /attendance, or /updateinfo.")
+            # ---------------- UNKNOWN COMMANDS ----------------
+            send_message(chat_id, "⚠️ Unknown command. Use /start, /attendance, or /updateinfo.")
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":

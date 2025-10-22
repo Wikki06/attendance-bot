@@ -1,13 +1,13 @@
-#!/usr/bin/env python3
 """
-Telegram Attendance Bot — Full Version (Updated with Dept/Year Validation & /updateinfo)
+Telegram Attendance Bot — Full Version with OTP (by Vignesh & Tamil Tharshini)
 Features:
 - Agreement before registration
-- Student registration (/start)
+- Student registration (/start) with RegNo + Mobile + OTP
+- Dept & Year validation
 - Attendance fetch (/attendance)
 - Update own info (/updateinfo)
-- Background drop monitoring
 - Admin commands: /broadcast & /remove_user
+- Background drop monitoring
 """
 
 import os
@@ -15,15 +15,18 @@ import csv
 import json
 import time
 import threading
+import random
 import requests
 from datetime import datetime
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
-ADMIN_CHAT_ID = "1718437414"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+ADMIN_CHAT_ID = "YOUR_ADMIN_CHAT_ID"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
-MONITOR_INTERVAL = 10 * 60  # 10 mins
+OFFSET_FILE = "offset.txt"
+MONITOR_INTERVAL = 10 * 60  # every 10 mins
+OTP_EXPIRY = 300  # OTP valid for 5 mins
 
 SUBJECT_MAP = {
     ("CSE", "IV"): ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"],
@@ -31,8 +34,8 @@ SUBJECT_MAP = {
     ("ECE", "IV"): ["EC4001", "EC4002", "EC4003"],
 }
 
-VALID_DEPTS = ["CSE", "MECH", "ECE", "AIDS", "AI&DS"]
-VALID_YEARS = ["I", "II", "III", "IV"]
+VALID_DEPTS = {"CSE", "MECH", "ECE", "AIDS", "AI&DS"}
+VALID_YEARS = {"I", "II", "III", "IV"}
 
 # ---------------- UTILITIES ----------------
 def log(msg):
@@ -71,7 +74,7 @@ def get_updates(offset):
 def ensure_csv():
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=["username", "name", "chat_id", "department", "year"])
+            writer = csv.DictWriter(f, fieldnames=["username", "name", "chat_id", "mobile", "department", "year"])
             writer.writeheader()
 
 def load_students():
@@ -81,7 +84,7 @@ def load_students():
 
 def save_students(students):
     with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=["username", "name", "chat_id", "department", "year"])
+        writer = csv.DictWriter(f, fieldnames=["username", "name", "chat_id", "mobile", "department", "year"])
         writer.writeheader()
         writer.writerows(students)
 
@@ -97,22 +100,24 @@ def remove_user(identifier):
     save_students(new_students)
     return len(students) - len(new_students)
 
-def add_or_update_student(chat_id, username, name, dept, year):
+def add_or_update_student(chat_id, username, name, mobile, dept, year):
     students = load_students()
     for s in students:
         if s["username"] == username:
-            s.update({"chat_id": chat_id, "name": name, "department": dept, "year": year})
+            s.update({"chat_id": chat_id, "name": name, "mobile": mobile, "department": dept, "year": year})
             save_students(students)
             return
-    students.append({"username": username, "name": name, "chat_id": chat_id, "department": dept, "year": year})
+    students.append({"username": username, "name": name, "chat_id": chat_id, "mobile": mobile, "department": dept, "year": year})
     save_students(students)
-    log(f"Saved {username} | {name} | {dept} | {year}")
+    log(f"Saved {username} | {name} | {mobile} | {dept} | {year}")
 
 # ---------------- ATTENDANCE ----------------
+CARE_API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
+
 def fetch_attendance(register_num):
     try:
         payload = {"register_num": register_num, "function": "sva"}
-        r = requests.post("https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp", json=payload, timeout=15)
+        r = requests.post(CARE_API_URL, json=payload, timeout=15)
         r.raise_for_status()
         data = r.json()
         att = {}
@@ -188,6 +193,10 @@ def attendance_monitor():
 
 # ---------------- TELEGRAM LISTENER ----------------
 pending = {}
+otp_store = {}  # chat_id -> {"otp": 123456, "expires": timestamp}
+
+def generate_otp():
+    return random.randint(100000, 999999)
 
 def telegram_listener():
     log("💬 Telegram listener running...")
@@ -195,30 +204,12 @@ def telegram_listener():
     while True:
         updates, offset = get_updates(offset)
         for upd in updates:
-            cb = upd.get("callback_query")
-            if cb:
-                chat_id = str(cb["from"]["id"])
-                data = cb["data"]
-                state = pending.get(chat_id)
-                if state and state.get("step") == "agreement":
-                    if data == "agree":
-                        state["step"] = "regno"
-                        send_message(chat_id, "✅ Great! Enter your CARE Register Number (starts with 8107):")
-                    else:
-                        send_message(chat_id, "❌ You must agree to continue.")
-                        pending.pop(chat_id, None)
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
-                    data={"callback_query_id": cb["id"]},
-                )
-                continue
-
             msg = upd.get("message", {})
             text = (msg.get("text") or "").strip()
             chat_id = str(msg.get("chat", {}).get("id", ""))
             name = msg.get("chat", {}).get("first_name", "Student")
 
-            # ---------------- ADMIN COMMANDS ----------------
+            # ADMIN COMMANDS
             if chat_id == ADMIN_CHAT_ID and text.startswith("/broadcast "):
                 message = text.replace("/broadcast ", "").strip()
                 if not message:
@@ -235,31 +226,16 @@ def telegram_listener():
                 send_message(chat_id, f"🗑️ Removed {removed} user(s) with ID/Reg: {ident}")
                 continue
 
-            # ---------------- START FLOW ----------------
+            # ---------------- START REGISTRATION ----------------
             if text == "/start":
                 existing = get_student_by_chat_id(chat_id)
                 if existing:
                     send_message(chat_id, f"✅ Already registered as {existing['name']}. Use /attendance.")
                     continue
-                send_message(
-                    chat_id,
-                    f"Hi {name}! Before we proceed:\n"
-                    "We collect your attendance & marks only for academic tracking.\n"
-                    "By clicking Agree ✅, you accept our policy & data usage terms.\n"
-                    "Click Disagree ❌ to cancel.",
-                    reply_markup={
-                        "inline_keyboard": [
-                            [
-                                {"text": "Agree ✅", "callback_data": "agree"},
-                                {"text": "Disagree ❌", "callback_data": "disagree"},
-                            ]
-                        ]
-                    },
-                )
-                pending[chat_id] = {"step": "agreement"}
+                pending[chat_id] = {"step": "regno"}
+                send_message(chat_id, f"Hi {name}! Enter your CARE Register Number (starts with 8107):")
                 continue
 
-            # ---------------- PENDING REGISTRATION ----------------
             if chat_id in pending:
                 state = pending[chat_id]
                 step = state.get("step")
@@ -267,9 +243,40 @@ def telegram_listener():
                 if step == "regno":
                     regno_input = text.strip()
                     if not regno_input.startswith("8107"):
-                        send_message(chat_id, "⚠️ Invalid register number. Try again.")
+                        send_message(chat_id, "❌ Invalid register number. Try again (8107xxxx).")
                         continue
                     state["regno"] = regno_input
+                    state["step"] = "mobile"
+                    send_message(chat_id, "Enter your Mobile Number (10 digits):")
+                    continue
+
+                if step == "mobile":
+                    mobile_input = text.strip()
+                    if not mobile_input.isdigit() or len(mobile_input) != 10:
+                        send_message(chat_id, "❌ Invalid mobile! Enter 10-digit number.")
+                        continue
+                    state["mobile"] = mobile_input
+                    otp = generate_otp()
+                    otp_store[chat_id] = {"otp": otp, "expires": time.time() + OTP_EXPIRY}
+                    state["step"] = "otp"
+                    send_message(chat_id, f"📩 Your OTP is: {otp}\nEnter it here to verify (valid 5 mins):")
+                    continue
+
+                if step == "otp":
+                    try:
+                        entered_otp = int(text.strip())
+                    except:
+                        send_message(chat_id, "❌ Enter numbers only for OTP.")
+                        continue
+                    otp_data = otp_store.get(chat_id)
+                    if not otp_data or time.time() > otp_data["expires"]:
+                        send_message(chat_id, "❌ OTP expired. Enter /start again.")
+                        pending.pop(chat_id, None)
+                        otp_store.pop(chat_id, None)
+                        continue
+                    if entered_otp != otp_data["otp"]:
+                        send_message(chat_id, "❌ Wrong OTP. Try again.")
+                        continue
                     state["step"] = "dept"
                     send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS / AI&DS):")
                     continue
@@ -277,8 +284,7 @@ def telegram_listener():
                 if step == "dept":
                     dept_input = text.upper().replace(" ", "")
                     if dept_input not in VALID_DEPTS:
-                        send_message(chat_id,
-                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                        send_message(chat_id, "❌ Invalid dept! CSE | MECH | ECE | AIDS | AI&DS")
                         continue
                     state["dept"] = dept_input
                     state["step"] = "year"
@@ -288,13 +294,13 @@ def telegram_listener():
                 if step == "year":
                     year_input = text.upper()
                     if year_input not in VALID_YEARS:
-                        send_message(chat_id,
-                                     "❌ Invalid year! Please enter in this format:\nI | II | III | IV")
+                        send_message(chat_id, "❌ Invalid year! I | II | III | IV")
                         continue
                     state["year"] = year_input
-                    add_or_update_student(chat_id, state["regno"], name, state["dept"], state["year"])
-                    send_message(chat_id, "🎉 Registered successfully! Use /attendance anytime.")
+                    add_or_update_student(chat_id, state["regno"], name, state["mobile"], state["dept"], state["year"])
+                    send_message(chat_id, "🎉 Registration complete! Use /attendance anytime.")
                     pending.pop(chat_id, None)
+                    otp_store.pop(chat_id, None)
                     continue
 
             # ---------------- UPDATE INFO ----------------
@@ -310,8 +316,7 @@ def telegram_listener():
             if chat_id in pending and pending[chat_id].get("step") == "dept_update":
                 dept_input = text.upper().replace(" ", "")
                 if dept_input not in VALID_DEPTS:
-                    send_message(chat_id,
-                                 "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                    send_message(chat_id, "❌ Invalid dept! CSE | MECH | ECE | AIDS | AI&DS")
                     continue
                 pending[chat_id]["dept"] = dept_input
                 pending[chat_id]["step"] = "year_update"
@@ -321,13 +326,12 @@ def telegram_listener():
             if chat_id in pending and pending[chat_id].get("step") == "year_update":
                 year_input = text.upper()
                 if year_input not in VALID_YEARS:
-                    send_message(chat_id,
-                                 "❌ Invalid year! Please enter in this format:\nI | II | III | IV")
+                    send_message(chat_id, "❌ Invalid year! I | II | III | IV")
                     continue
                 student = get_student_by_chat_id(chat_id)
-                add_or_update_student(chat_id, student["username"], student["name"],
+                add_or_update_student(chat_id, student["username"], student["name"], student["mobile"],
                                       pending[chat_id]["dept"], year_input)
-                send_message(chat_id, "✅ Your Department and Year have been updated successfully!")
+                send_message(chat_id, "✅ Department & Year updated successfully!")
                 pending.pop(chat_id, None)
                 continue
 

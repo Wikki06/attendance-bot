@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Telegram Attendance Bot — Full Version (by Vignesh & Tamil Tharshini)
+Telegram Attendance Bot — Full Version (Updated with Dept/Year Validation & /updateinfo)
 Features:
 - Agreement before registration
 - Student registration (/start)
 - Attendance fetch (/attendance)
+- Update own info (/updateinfo)
 - Background drop monitoring
 - Admin commands: /broadcast & /remove_user
 """
@@ -22,15 +23,16 @@ BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 ADMIN_CHAT_ID = "1718437414"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
-OFFSET_FILE = "offset.txt"
-CARE_API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
-MONITOR_INTERVAL = 10 * 60  # every 10 mins
+MONITOR_INTERVAL = 10 * 60  # 10 mins
 
 SUBJECT_MAP = {
     ("CSE", "IV"): ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"],
     ("CSE", "III"): ["CS3351", "CS3352", "CS3353"],
     ("ECE", "IV"): ["EC4001", "EC4002", "EC4003"],
 }
+
+VALID_DEPTS = ["CSE", "MECH", "ECE", "AIDS", "AI&DS"]
+VALID_YEARS = ["I", "II", "III", "IV"]
 
 # ---------------- UTILITIES ----------------
 def log(msg):
@@ -110,7 +112,7 @@ def add_or_update_student(chat_id, username, name, dept, year):
 def fetch_attendance(register_num):
     try:
         payload = {"register_num": register_num, "function": "sva"}
-        r = requests.post(CARE_API_URL, json=payload, timeout=15)
+        r = requests.post("https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp", json=payload, timeout=15)
         r.raise_for_status()
         data = r.json()
         att = {}
@@ -216,7 +218,7 @@ def telegram_listener():
             chat_id = str(msg.get("chat", {}).get("id", ""))
             name = msg.get("chat", {}).get("first_name", "Student")
 
-            # ADMIN COMMANDS
+            # ---------------- ADMIN COMMANDS ----------------
             if chat_id == ADMIN_CHAT_ID and text.startswith("/broadcast "):
                 message = text.replace("/broadcast ", "").strip()
                 if not message:
@@ -233,7 +235,7 @@ def telegram_listener():
                 send_message(chat_id, f"🗑️ Removed {removed} user(s) with ID/Reg: {ident}")
                 continue
 
-            # START flow
+            # ---------------- START FLOW ----------------
             if text == "/start":
                 existing = get_student_by_chat_id(chat_id)
                 if existing:
@@ -257,7 +259,7 @@ def telegram_listener():
                 pending[chat_id] = {"step": "agreement"}
                 continue
 
-            # Pending registration steps
+            # ---------------- PENDING REGISTRATION ----------------
             if chat_id in pending:
                 state = pending[chat_id]
                 step = state.get("step")
@@ -269,23 +271,67 @@ def telegram_listener():
                         continue
                     state["regno"] = regno_input
                     state["step"] = "dept"
-                    send_message(chat_id, "Enter your Department (CSE, ECE, etc):")
+                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS / AI&DS):")
                     continue
 
                 if step == "dept":
-                    state["dept"] = text.upper().strip()
+                    dept_input = text.upper().replace(" ", "")
+                    if dept_input not in VALID_DEPTS:
+                        send_message(chat_id,
+                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                        continue
+                    state["dept"] = dept_input
                     state["step"] = "year"
                     send_message(chat_id, "Enter your Year (I / II / III / IV):")
                     continue
 
                 if step == "year":
-                    state["year"] = text.upper().strip()
+                    year_input = text.upper()
+                    if year_input not in VALID_YEARS:
+                        send_message(chat_id,
+                                     "❌ Invalid year! Please enter in this format:\nI | II | III | IV")
+                        continue
+                    state["year"] = year_input
                     add_or_update_student(chat_id, state["regno"], name, state["dept"], state["year"])
                     send_message(chat_id, "🎉 Registered successfully! Use /attendance anytime.")
                     pending.pop(chat_id, None)
                     continue
 
-            # /attendance command
+            # ---------------- UPDATE INFO ----------------
+            if text == "/updateinfo":
+                student = get_student_by_chat_id(chat_id)
+                if not student:
+                    send_message(chat_id, "⚠️ Not registered yet. Use /start first.")
+                    continue
+                pending[chat_id] = {"step": "dept_update"}
+                send_message(chat_id, "Enter new Department (CSE / MECH / ECE / AIDS / AI&DS):")
+                continue
+
+            if chat_id in pending and pending[chat_id].get("step") == "dept_update":
+                dept_input = text.upper().replace(" ", "")
+                if dept_input not in VALID_DEPTS:
+                    send_message(chat_id,
+                                 "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                    continue
+                pending[chat_id]["dept"] = dept_input
+                pending[chat_id]["step"] = "year_update"
+                send_message(chat_id, "Enter new Year (I / II / III / IV):")
+                continue
+
+            if chat_id in pending and pending[chat_id].get("step") == "year_update":
+                year_input = text.upper()
+                if year_input not in VALID_YEARS:
+                    send_message(chat_id,
+                                 "❌ Invalid year! Please enter in this format:\nI | II | III | IV")
+                    continue
+                student = get_student_by_chat_id(chat_id)
+                add_or_update_student(chat_id, student["username"], student["name"],
+                                      pending[chat_id]["dept"], year_input)
+                send_message(chat_id, "✅ Your Department and Year have been updated successfully!")
+                pending.pop(chat_id, None)
+                continue
+
+            # ---------------- ATTENDANCE ----------------
             if text == "/attendance":
                 student = get_student_by_chat_id(chat_id)
                 if not student:
@@ -311,10 +357,10 @@ def telegram_listener():
                 continue
 
             if text.startswith("/"):
-                send_message(chat_id, "⚠️ Unknown command. Use /start or /attendance.")
+                send_message(chat_id, "⚠️ Unknown command. Use /start, /attendance, or /updateinfo.")
                 continue
 
-            send_message(chat_id, "🤖 Invalid input. Use /start or /attendance.")
+            send_message(chat_id, "🤖 Invalid input. Use /start, /attendance, or /updateinfo.")
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":

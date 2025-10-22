@@ -168,17 +168,14 @@ def attendance_monitor():
                         drops.append(f"{sub}: {old:.2f}% → {new:.2f}%")
                 if overall and (overall < 80 or drops):
                     msg = [f"Dear {name},"]
-                    if overall < 75:
-                        msg.append(f"🚨 Overall below 75% ({overall}%)")
-                    elif overall < 80:
-                        msg.append(f"⚠️ Overall near limit ({overall}%)")
                     if drops:
                         msg.append("📉 Drop detected:")
                         msg += [f"• {d}" for d in drops]
-                    msg.append("\n📊 Subjects:")
-                    for sub in subs:
-                        if sub in att:
-                            msg.append(f"• {sub}: {att[sub]:.2f}%")
+                    # Only show overall at the end
+                    if overall < 75:
+                        msg.append(f"\n🚨 Overall below 75% ({overall}%)")
+                    else:
+                        msg.append(f"\nOVERALL: {overall}%")
                     send_message(chat, "\n".join(msg))
                 prev_data[reg] = att
             save_json(prev_data)
@@ -203,7 +200,7 @@ def telegram_listener():
                 if state and state.get("step") == "agreement":
                     if data == "agree":
                         state["step"] = "regno"
-                        send_message(chat_id, "✅ Great! Enter your CARE Register Number (starts with 8107):")
+                        send_message(chat_id, "✅ Great! Enter your CARE Register Number :")
                     else:
                         send_message(chat_id, "❌ Registration cancelled. Use /start to try again.")
                         pending.pop(chat_id, None)
@@ -244,7 +241,7 @@ def telegram_listener():
                 send_message(
                     chat_id,
                     f"Hi {name}! Before we proceed:\n"
-                    "We collect your attendance & marks only for academic tracking.\n"
+                    "We collect your attendance & marks from the CARE CRM only for academic tracking.\n"
                     "By clicking Agree ✅, you accept our policy & data usage terms.\n"
                     "Click Disagree ❌ to cancel.",
                     reply_markup={
@@ -269,20 +266,19 @@ def telegram_listener():
                     if not regno_input.startswith("8107"):
                         send_message(chat_id, "⚠️ Invalid register number. Try again.")
                         continue
-                    # Prevent duplicate RegNo
                     if any(s["username"] == regno_input for s in load_students()):
                         send_message(chat_id, "⚠️ This Register Number is already registered. Contact admin.")
                         continue
                     state["regno"] = regno_input
                     state["step"] = "dept"
-                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS / AI&DS):")
+                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS ):")
                     continue
 
                 if step == "dept":
                     dept_input = text.upper().replace(" ", "")
                     if dept_input not in VALID_DEPTS:
                         send_message(chat_id,
-                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS ")
                         continue
                     state["dept"] = dept_input
                     state["step"] = "year"

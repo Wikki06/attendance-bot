@@ -177,6 +177,24 @@ def attendance_monitor():
             log(f"monitor error: {e}")
         time.sleep(MONITOR_INTERVAL)
 
+
+def get_updates(offset):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    params = {"timeout": 100}
+    if offset:
+        params["offset"] = offset
+    try:
+        r = requests.get(url, params=params, timeout=110)
+        r.raise_for_status()
+        data = r.json().get("result", [])
+        if data:
+            offset = data[-1]["update_id"] + 1
+        return data, offset
+    except Exception as e:
+        log(f"get_updates error: {e}")
+        return [], offset
+
+
 # ---------------- TELEGRAM LISTENER ----------------
 pending={}
 

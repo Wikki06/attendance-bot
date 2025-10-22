@@ -20,8 +20,8 @@ import requests
 from datetime import datetime
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-ADMIN_CHAT_ID = "YOUR_ADMIN_CHAT_ID"
+BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
+ADMIN_CHAT_ID = "1718437414"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
 OFFSET_FILE = "offset.txt"

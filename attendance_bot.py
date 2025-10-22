@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Telegram Attendance Bot — Full Version (by Vignesh & Tamil Tharshini)
 Features:
@@ -203,7 +204,7 @@ def telegram_listener():
                         send_message(chat_id, "✅ Great! Enter your CARE Register Number (starts with 8107):")
                     else:
                         send_message(chat_id, "❌ You must agree to continue.")
-                    pending.pop(chat_id, None)
+                        pending.pop(chat_id, None)
                 requests.post(
                     f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
                     data={"callback_query_id": cb["id"]},
@@ -261,16 +262,8 @@ def telegram_listener():
                 state = pending[chat_id]
                 step = state.get("step")
 
-                log(f"Pending step for chat_id {chat_id}: {step} | Received text: '{text}'")
-
-                if step == "agreement" and text.lower() == "agree":
-                    state["step"] = "regno"
-                    send_message(chat_id, "✅ Enter your CARE Register Number (starts with 8107):")
-                    continue
-
                 if step == "regno":
                     regno_input = text.strip()
-                    log(f"Register number input: '{regno_input}'")
                     if not regno_input.startswith("8107"):
                         send_message(chat_id, "⚠️ Invalid register number. Try again.")
                         continue

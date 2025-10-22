@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Telegram Attendance Bot — Full Version (Fixed Admin + Monitoring)
+Telegram Attendance Bot — Full Version (Interactive Admin + Monitoring)
 Features:
 - Policy agreement before registration
 - Student registration (/start)
 - Attendance fetch (/attendance)
 - Update own info (/updateinfo)
 - Background drop monitoring
-- Admin commands: /broadcast & /remove_user
+- Admin commands: /broadcast & /remove_user (interactive)
 - Unauthorized & unwanted message handling
 """
 
@@ -213,24 +213,50 @@ def telegram_listener():
             chat_id = str(msg.get("chat", {}).get("id", ""))
             name = msg.get("chat", {}).get("first_name", "Student")
 
-            # ---------------- ADMIN COMMANDS ----------------
-            if text.startswith("/broadcast") or text.startswith("/remove_user"):
-                if chat_id == ADMIN_CHAT_ID:
-                    if text.startswith("/broadcast "):
-                        message = text.replace("/broadcast ", "").strip()
-                        if not message:
-                            send_message(chat_id, "⚠️ Usage: /broadcast <message>")
-                        else:
-                            for s in load_students():
-                                send_message(s["chat_id"], f"📢 *Announcement:*\n{message}")
-                            send_message(chat_id, "✅ Broadcast sent to all.")
-                    elif text.startswith("/remove_user "):
-                        ident = text.split(" ", 1)[1].strip()
+            # ---------------- ADMIN COMMANDS INTERACTIVE ----------------
+            if chat_id == ADMIN_CHAT_ID:
+                if text == "/broadcast":
+                    pending[chat_id] = {"step": "admin_broadcast"}
+                    send_message(chat_id, "💬 Enter the message to broadcast to all users:")
+                    continue
+                elif text == "/remove_user":
+                    pending[chat_id] = {"step": "admin_remove"}
+                    send_message(chat_id, "🗑️ Enter the username/ID of the user to remove:")
+                    continue
+
+            # ---------------- HANDLE PENDING ADMIN STEPS ----------------
+            if chat_id in pending:
+                state = pending[chat_id]
+                step = state.get("step")
+                
+                # Admin broadcasting
+                if step == "admin_broadcast":
+                    message = text.strip()
+                    if not message:
+                        send_message(chat_id, "⚠️ Message cannot be empty. Enter the message to broadcast:")
+                    else:
+                        for s in load_students():
+                            send_message(s["chat_id"], f"📢 *Announcement:*\n{message}")
+                        send_message(chat_id, "✅ Message sent to all registered users.")
+                        pending.pop(chat_id, None)
+                    continue
+                
+                # Admin remove user
+                if step == "admin_remove":
+                    ident = text.strip()
+                    if not ident:
+                        send_message(chat_id, "⚠️ Username/ID cannot be empty. Enter the username/ID of the user to remove:")
+                    else:
                         removed = remove_user(ident)
-                        send_message(chat_id, f"🗑️ Removed {removed} user(s) with ID/Reg: {ident}")
-                else:
+                        send_message(chat_id, f"✅ User removed successfully.")
+                        pending.pop(chat_id, None)
+                    continue
+
+            # ---------------- NON-ADMIN ADMIN COMMAND ATTEMPTS ----------------
+            if text.startswith("/broadcast") or text.startswith("/remove_user"):
+                if chat_id != ADMIN_CHAT_ID:
                     send_message(chat_id, "⚠️ You are not authorized to use this command.")
-                continue
+                    continue
 
             # ---------------- START FLOW ----------------
             if text == "/start":
@@ -256,7 +282,7 @@ def telegram_listener():
                 pending[chat_id] = {"step": "agreement"}
                 continue
 
-            # ---------------- PENDING REGISTRATION ----------------
+            # ---------------- PENDING STUDENT REGISTRATION ----------------
             if chat_id in pending:
                 state = pending[chat_id]
                 step = state.get("step")
@@ -271,14 +297,14 @@ def telegram_listener():
                         continue
                     state["regno"] = regno_input
                     state["step"] = "dept"
-                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS / AI&DS):")
+                    send_message(chat_id, "Enter your Department (CSE / MECH / ECE / AIDS ):")
                     continue
 
                 if step == "dept":
                     dept_input = text.upper().replace(" ", "")
                     if dept_input not in VALID_DEPTS:
                         send_message(chat_id,
-                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS | AI&DS")
+                                     "❌ Invalid department! Please enter in this format:\nCSE | MECH | ECE | AIDS ")
                         continue
                     state["dept"] = dept_input
                     state["step"] = "year"

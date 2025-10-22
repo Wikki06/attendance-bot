@@ -33,7 +33,7 @@ OTP_EXPIRY = 300  # 5 minutes
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "careattendancebot@gmail.com"     # sender email address
-SMTP_PASS = "uwpx qmvc bput aooa"     # app password or SMTP password
+SMTP_PASS = "uwpxqmvcbputaooa"     # app password or SMTP password
 
 # SUBJECT MAP and valid values
 SUBJECT_MAP = {

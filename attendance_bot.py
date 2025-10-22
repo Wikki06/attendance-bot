@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Telegram Attendance Bot — Full Version (Admin Fix + Monitoring)
+Telegram Attendance Bot — Full Version (Fixed Admin + Monitoring)
 Features:
 - Policy agreement before registration
 - Student registration (/start)
@@ -21,7 +21,7 @@ from datetime import datetime
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
-ADMIN_CHAT_ID = "1718437414"  # only admin
+ADMIN_CHAT_ID = "1718437414"
 CSV_FILE = "students.csv"
 DATA_FILE = "attendance.json"
 MONITOR_INTERVAL = 10 * 60  # 10 mins
@@ -198,7 +198,7 @@ def telegram_listener():
                 if state and state.get("step") == "agreement":
                     if data == "agree":
                         state["step"] = "regno"
-                        send_message(chat_id, "✅ Great! Enter your CARE Register Number (starts with 8107):")
+                        send_message(chat_id, "✅ Great! Enter your CARE Register Number :")
                     else:
                         send_message(chat_id, "❌ Registration cancelled. Use /start to try again.")
                         pending.pop(chat_id, None)
@@ -215,24 +215,21 @@ def telegram_listener():
 
             # ---------------- ADMIN COMMANDS ----------------
             if text.startswith("/broadcast") or text.startswith("/remove_user"):
-                if chat_id != ADMIN_CHAT_ID:
+                if chat_id == ADMIN_CHAT_ID:
+                    if text.startswith("/broadcast "):
+                        message = text.replace("/broadcast ", "").strip()
+                        if not message:
+                            send_message(chat_id, "⚠️ Usage: /broadcast <message>")
+                        else:
+                            for s in load_students():
+                                send_message(s["chat_id"], f"📢 *Announcement:*\n{message}")
+                            send_message(chat_id, "✅ Broadcast sent to all.")
+                    elif text.startswith("/remove_user "):
+                        ident = text.split(" ", 1)[1].strip()
+                        removed = remove_user(ident)
+                        send_message(chat_id, f"🗑️ Removed {removed} user(s) with ID/Reg: {ident}")
+                else:
                     send_message(chat_id, "⚠️ You are not authorized to use this command.")
-                    continue
-
-            if chat_id == ADMIN_CHAT_ID and text.startswith("/broadcast "):
-                message = text.replace("/broadcast ", "").strip()
-                if not message:
-                    send_message(chat_id, "⚠️ Usage: /broadcast <message>")
-                    continue
-                for s in load_students():
-                    send_message(s["chat_id"], f"📢 *Announcement:*\n{message}")
-                send_message(chat_id, "✅ Broadcast sent to all.")
-                continue
-
-            if chat_id == ADMIN_CHAT_ID and text.startswith("/remove_user "):
-                ident = text.split(" ", 1)[1].strip()
-                removed = remove_user(ident)
-                send_message(chat_id, f"🗑️ Removed {removed} user(s) with ID/Reg: {ident}")
                 continue
 
             # ---------------- START FLOW ----------------
@@ -244,7 +241,7 @@ def telegram_listener():
                 send_message(
                     chat_id,
                     f"Hi {name}! Before we proceed:\n"
-                    "We collect your attendance & marks only for academic tracking.\n"
+                    "We collect your attendance & marks from CARE CRM only for academic tracking.\n"
                     "By clicking Agree ✅, you accept our policy & data usage terms.\n"
                     "Click Disagree ❌ to cancel.",
                     reply_markup={

@@ -22,10 +22,16 @@ def log(msg):
 
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": chat_id, "text": text}, timeout=10)
-    except Exception as e:
-        log(f"Telegram error: {e}")
+    requests.post(
+        url,
+        data={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        },
+        timeout=10
+    )
+
 
 # ================= STORAGE =================
 def ensure_csv():
@@ -92,13 +98,41 @@ def fetch_results(regno):
 
 # ================= FORMAT =================
 def format_result(name, results):
-    msg = ["🎓 End Semester Result", f"👤 {name}", "-" * 35]
-    for r in results:
-        msg.append(
-            f"Sem {r['semester']} | {r['sub_code']} | {r['grade']}\n"
-            f"{r['sub_name']}"
+    passed = all(r["grade"] not in ["U", "RA", "AB"] for r in results)
+
+    header = (
+        "🎓✨ END SEMESTER RESULT ✨🎓\n\n"
+        f"Hey {name} 👋\n"
+    )
+
+    if passed:
+        header += (
+            "🎉 Woohoo! Congratulations!\n"
+            "You have successfully cleared your exams 💪🔥\n\n"
         )
-    return "\n\n".join(msg)
+    else:
+        header += (
+            "📢 Your exam results are available.\n"
+            "Keep going — setbacks are part of success 💙\n\n"
+        )
+
+    body = []
+    for r in results:
+        emoji = "🏆" if r["grade"] in ["O", "A+"] else "✅"
+        body.append(
+            f"{emoji} *{r['sub_name']}*\n"
+            f"🆔 {r['sub_code']} | Sem {r['semester']}\n"
+            f"🎯 Grade: *{r['grade']}*"
+        )
+
+    footer = (
+        "\n\n🌟 Keep pushing forward — your hard work shows!\n"
+        "🤖 Sent with ❤️ by your Attendance & Result Bot By Vignesh"
+    )
+
+    return header + "\n\n".join(body) + footer
+
+
 
 # ================= AUTO MONITOR =================
 def result_monitor():

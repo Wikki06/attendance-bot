@@ -8,7 +8,7 @@ import requests
 from datetime import datetime
 
 # ================= CONFIG =================
-BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
 
 CSV_FILE = "students.csv"
@@ -31,7 +31,6 @@ def send_message(chat_id, text):
         },
         timeout=10
     )
-
 
 # ================= STORAGE =================
 def ensure_csv():
@@ -96,7 +95,7 @@ def fetch_results(regno):
         log(f"API error: {e}")
         return []
 
-# ================= FORMAT =================
+# ================= FORMAT RESULT =================
 def format_result(name, results):
     passed = all(r["grade"] not in ["U", "RA", "AB"] for r in results)
 
@@ -132,8 +131,6 @@ def format_result(name, results):
 
     return header + "\n\n".join(body) + footer
 
-
-
 # ================= AUTO MONITOR =================
 def result_monitor():
     log("📡 Result monitor started")
@@ -157,7 +154,6 @@ def result_monitor():
                     )
                     cache[regno] = {"auto_sem7": True}
                     save_cache(cache)
-                    log(f"✅ Auto result sent for {regno}")
 
         except Exception as e:
             log(f"Monitor error: {e}")
@@ -184,34 +180,40 @@ def telegram_listener():
                 chat_id = msg.get("chat", {}).get("id")
                 name = msg.get("chat", {}).get("first_name", "Student")
 
-                # ---------- START ----------
+                # ---- START ----
                 if text == "/start":
                     if get_student(chat_id):
-                        send_message(chat_id, "✅ Already registered.")
+                        send_message(chat_id, "✅ You are already registered.\n\n👉 Use /result to check your result.")
                     else:
                         pending[chat_id] = "regno"
-                        send_message(chat_id, "Enter your Register Number:")
+                        send_message(chat_id, "👋 Welcome!\n\nPlease enter your *Register Number*:")
                     continue
 
-                # ---------- REGISTER FLOW ----------
+                # ---- REGISTER ----
                 if chat_id in pending:
                     add_student(chat_id, text, name)
                     pending.pop(chat_id)
-                    send_message(chat_id, "🎉 Registered successfully!")
+                    send_message(
+                        chat_id,
+                        "🎉 *Registered successfully!*\n\n"
+                        "You can now use the following commands 👇\n\n"
+                        "📊 /attendance – Check your attendance\n"
+                        "🎓 /result – Check your exam result"
+                    )
                     continue
 
-                # ---------- MANUAL RESULT ----------
+                # ---- MANUAL RESULT ----
                 if text == "/result":
                     student = get_student(chat_id)
                     if not student:
-                        send_message(chat_id, "⚠️ Register first using /start")
+                        send_message(chat_id, "⚠️ Please register first using /start")
                         continue
 
-                    send_message(chat_id, "⏳ Fetching result...")
+                    send_message(chat_id, "⏳ Fetching your result...")
                     results = fetch_results(student["regno"])
 
                     if not results:
-                        send_message(chat_id, "❌ Result not available.")
+                        send_message(chat_id, "❌ Result not available yet.")
                         continue
 
                     send_message(
@@ -219,6 +221,15 @@ def telegram_listener():
                         format_result(student["name"], results)
                     )
                     continue
+
+                # ---- INVALID INPUT ----
+                send_message(
+                    chat_id,
+                    "⚠️ Invalid command.\n\n"
+                    "👉 Available commands:\n"
+                    "/start – Register\n"
+                    "/result – View Result"
+                )
 
         except Exception as e:
             log(f"Listener error: {e}")

@@ -8,7 +8,7 @@ import requests
 from datetime import datetime
 
 # ================= CONFIG =================
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
 API_URL = "https://3xlmsxcyn0.execute-api.ap-south-1.amazonaws.com/Prod/CRM-StudentApp"
 
 CSV_FILE = "students.csv"

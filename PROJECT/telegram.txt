@@ -1,0 +1,318 @@
+import requests
+import csv
+import time
+import json
+import os
+import threading
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+
+BOT_TOKEN = "8309149752:AAF-ydD1e3ljBjoVwu8vPJCOue14YeQPfoY"
+CSV_FILE = "students.csv"
+DATA_FILE = "attendance_data.json"
+OFFSET_FILE = "offset.txt"
+CHAT_HISTORY_FILE = "chat_history.csv"
+HIGHLIGHTED_SUBJECTS = ["CBM348", "GE3791", "AI3021", "OIM352", "GE3751"]
+
+pending_usernames = {}
+admin_chat_id = "1718437414"
+broadcast_mode = {}
+
+# === Offset Persistence ===
+def load_offset():
+    if os.path.exists(OFFSET_FILE):
+        with open(OFFSET_FILE, "r") as f:
+            return int(f.read().strip())
+    return None
+
+def save_offset(offset):
+    with open(OFFSET_FILE, "w") as f:
+        f.write(str(offset))
+
+# === Chat History Logging ===
+def log_chat_interaction(chat_id, username, message_text):
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    try:
+        file_exists = os.path.isfile(CHAT_HISTORY_FILE)
+        with open(CHAT_HISTORY_FILE, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["timestamp", "chat_id", "username", "message_text"])
+            writer.writerow([timestamp, chat_id, username, message_text])
+        print(f"Logged chat: {timestamp} - {chat_id} - {username} - {message_text}")
+    except Exception as e:
+        print(f"Error logging chat interaction: {e}")
+
+
+# === Telegram API Functions ===
+def get_updates(offset):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    params = {"timeout": 100}
+    if offset is not None:
+        params["offset"] = offset
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()["result"]
+        if data:
+            offset = data[-1]["update_id"] + 1
+            save_offset(offset)
+        return data, offset
+    except Exception as e:
+        print(f"❌ Error in get_updates: {e}")
+        return [], offset
+
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print(f"❌ Failed to send message: {e}")
+
+def broadcast_to_all(message):
+    students = load_students()
+    sent_to = set()
+    for student in students:
+        chat_id = student.get("chat_id")
+        if chat_id and chat_id not in sent_to:
+            try:
+                send_message(chat_id, f"📢 Admin Message:\n{message}")
+                sent_to.add(chat_id)
+            except Exception as e:
+                print(f"❌ Failed to send to {chat_id}: {e}")
+
+def update_csv(chat_id, name, username):
+    updated = False
+    rows = []
+    with open(CSV_FILE, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row["username"].strip() == username.strip():
+                if row.get("chat_id") and row["chat_id"].strip() == str(chat_id):
+                    # Already registered: do not resend message here to avoid loops
+                    return False
+                row["chat_id"] = str(chat_id)
+                row["name"] = name
+                updated = True
+            rows.append(row)
+    if updated:
+        with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=["username", "password", "name", "chat_id"])
+            writer.writeheader()
+            writer.writerows(rows)
+        send_message(chat_id, f"✅ You’re now subscribed to attendance alerts, {name}!")
+        return True
+    return False
+
+# === Attendance Functions ===
+def load_students():
+    students = []
+    with open(CSV_FILE, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            students.append({
+                "username": row["username"].strip(),
+                "password": row["password"].strip(),
+                "name": row["name"].strip(),
+                "chat_id": row.get("chat_id", "").strip()
+            })
+    return students
+
+def load_old_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_new_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
+def fetch_attendance(username, password):
+    attendance = {}
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+    driver.get("https://crm.care.ac.in/login.html")
+    time.sleep(2)
+    driver.find_element(By.ID, "login_id").send_keys(username)
+    driver.find_element(By.ID, "password").send_keys(password)
+    driver.find_element(By.ID, "login_button").click()
+    time.sleep(3)
+    driver.get("https://crm.care.ac.in/pages/student/attendance.html")
+    time.sleep(3)
+    rows = driver.find_elements(By.CSS_SELECTOR, "table tr")
+    for row in rows:
+        cols = row.find_elements(By.TAG_NAME, "td")
+        if len(cols) >= 3:
+            code = cols[0].text.strip()
+            perc = cols[2].text.strip()
+            if "%" in perc and code in HIGHLIGHTED_SUBJECTS:
+                try:
+                    attendance[code] = float(perc.replace("%", ""))
+                except ValueError:
+                    print(f"⚠️ Could not convert {perc} for {code}")
+    driver.quit()
+    return attendance
+
+def check_attendance(student, old_data):
+    username = student["username"]
+    password = student["password"]
+    name = student["name"]
+    chat_id = student["chat_id"]
+    if not chat_id:
+        print(f"⚠️ No chat ID for {name}. Skipping.")
+        return
+    new_data = fetch_attendance(username, password)
+    if not new_data:
+        return
+    subject_values = [v for k, v in new_data.items() if k in HIGHLIGHTED_SUBJECTS]
+    if not subject_values:
+        return
+    overall = sum(subject_values) / len(subject_values)
+    dropped_subjects = []
+    if username in old_data:
+        old_subjects = old_data[username]
+        for code in HIGHLIGHTED_SUBJECTS:
+            old_val = old_subjects.get(code)
+            new_val = new_data.get(code)
+            if old_val is not None and new_val is not None and new_val < old_val:
+                dropped_subjects.append(f"{code}: {old_val:.2f}% → {new_val:.2f}%")
+    if overall <= 80 or dropped_subjects:
+        lines = [f"Dear {name},"]
+        if overall <= 75:
+            lines.append("🚨 Your overall attendance is below 75%. Please improve.")
+        elif overall < 80:
+            lines.append("⚠️ Warning! Your overall attendance is near 75%.")
+        if dropped_subjects:
+            lines.append("📉 Attendance dropped in:")
+            lines.extend([f"• {s}" for s in dropped_subjects])
+        lines.append(f"📊 Overall: {overall:.2f}%")
+        message = "\n".join(lines)
+        send_message(chat_id, message)
+    old_data[username] = new_data
+    save_new_data(old_data)
+
+def fetch_result(username, password):
+    result_data = {}
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+        driver.get("https://crm.care.ac.in/login.html")
+        time.sleep(2)
+
+        # Login
+        driver.find_element(By.ID, "login_id").send_keys(username)
+        driver.find_element(By.ID, "password").send_keys(password)
+        driver.find_element(By.ID, "login_button").click()
+        time.sleep(3)
+
+        # Navigate to student dashboard
+        driver.get("https://crm.care.ac.in/pages/student/result.html")
+        time.sleep(3)
+
+        # Check if "END SEMESTER RESULT" exists
+        if "End Semester Result" in driver.page_source:
+            rows = driver.find_elements(By.CSS_SELECTOR, "table tr")
+            for row in rows:
+                cols = row.find_elements(By.TAG_NAME, "td")
+                if len(cols) >= 2:
+                    course_code = cols[0].text.strip()
+                    grade = cols[1].text.strip()
+                    result_data[course_code] = grade
+        driver.quit()
+    except Exception as e:
+        print(f"❌ Error fetching result for {username}: {e}")
+    return result_data
+
+
+def telegram_listener():
+    print("📡 Bot is live. Listening for /start, /result, and admin commands...")
+    offset = load_offset()
+    while True:
+        updates, offset = get_updates(offset)
+        for update in updates:
+            message = update.get("message", {})
+            text = message.get("text", "").strip()
+            chat_id = str(message["chat"]["id"])
+            name = message["chat"].get("first_name", "User")
+
+            # Log every user interaction
+            log_chat_interaction(chat_id, name, text)
+
+            students = load_students()
+            registered_usernames = {s['username']: s['chat_id'] for s in students if s.get('chat_id')}
+            known_usernames = {s['username'] for s in students}
+
+            # === ADMIN COMMANDS ===
+            if chat_id == admin_chat_id:
+                if text == "/broadcast":
+                    send_message(chat_id, "📢 Enter the message to broadcast to all users:")
+                    broadcast_mode[chat_id] = True
+                    continue
+                elif broadcast_mode.get(chat_id):
+                    broadcast_to_all(text)
+                    send_message(chat_id, "✅ Broadcast sent to all registered users.")
+                    broadcast_mode.pop(chat_id)
+                    continue
+            elif text == "/broadcast":
+                send_message(chat_id, "❌ You are not authorized to use this command.")
+                continue
+
+            # === USER COMMANDS ===
+            if text == "/start":
+                if chat_id in registered_usernames.values():
+                    send_message(chat_id, f"ℹ️ You’re already registered, {name}.")
+                else:
+                    send_message(chat_id, f"Hi {name}! Please reply with your CARE register number to complete registration.")
+                    pending_usernames[chat_id] = True
+                continue
+
+            if chat_id in pending_usernames:
+                if text.startswith("8107") and text in known_usernames:
+                    update_csv(chat_id, name, text)
+                else:
+                    send_message(chat_id, "⚠️ Reg number not matching. Please contact your admin.")
+                pending_usernames.pop(chat_id, None)
+                continue
+
+            if text == "/result":
+                student = next((s for s in students if s.get("chat_id") == chat_id), None)
+                if not student:
+                    send_message(chat_id, "⚠️ You are not registered yet. Use /start first.")
+                    continue
+                send_message(chat_id, "⏳ Fetching your results, please wait...")
+                result = fetch_result(student["username"], student["password"])
+                if result:
+                    lines = [f"📄 End Semester Results for {student['name']}:"]
+                    for course, grade in result.items():
+                        lines.append(f"• {course}: {grade}")
+                    send_message(chat_id, "\n".join(lines))
+                else:
+                    send_message(chat_id, "⚠️ No results found or 'END SEMESTER RESULT' not available.")
+                continue
+
+            # Unknown or unsupported commands
+            if text.startswith("/"):
+                send_message(chat_id, "⚠️ Unknown command.")
+                continue
+
+            # Fallback for unwanted messages
+            send_message(chat_id, "⚠️ Don't send any unwanted messages. You are being monitored.")
+
+def attendance_checker():
+    print("🚀 Starting attendance checks...")
+    while True:
+        students = load_students()
+        old_data = load_old_data()
+        for student in students:
+            check_attendance(student, old_data)
+        print("✅ Attendance check complete. Sleeping...")
+        time.sleep(1800)
+
+        
+if __name__ == "__main__":
+    threading.Thread(target=telegram_listener, daemon=True).start()
+    threading.Thread(target=attendance_checker, daemon=True).start()
+    while True:
+        time.sleep(10)

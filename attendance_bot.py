@@ -127,7 +127,7 @@ def format_result(name, results):
 
     footer = (
         "\n\n🌟 Keep pushing forward — your hard work shows!\n"
-        "🤖 Sent with ❤️ by your Attendance & Result Bot By Vignesh"
+        "🤖 Automated and Sent with ❤️ By Vignesh and Tamil Tharshini"
     )
 
     return header + "\n\n".join(body) + footer

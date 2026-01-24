@@ -21,15 +21,18 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 def send_message(chat_id, text):
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        },
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        log("Telegram Send Error: " + str(e))
 
 # ================= STORAGE =================
 def ensure_csv():
@@ -57,7 +60,11 @@ def get_student(chat_id):
 
 def add_student(chat_id, regno, name):
     students = load_students()
-    students.append({"regno": regno, "name": name, "chat_id": str(chat_id)})
+    students.append({
+        "regno": regno,
+        "name": name,
+        "chat_id": str(chat_id)
+    })
     save_students(students)
 
 def update_regno(chat_id, new_regno):
@@ -69,121 +76,223 @@ def update_regno(chat_id, new_regno):
             return True
     return False
 
+# ================= CACHE =================
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_cache(data):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
 # ================= ATTENDANCE API =================
 def fetch_attendance(regno):
-    payload = {"register_num": regno, "college_code": 8107, "function": "sva"}
+    payload = {
+        "register_num": regno,
+        "college_code": 8107,
+        "function": "sva"
+    }
+
     try:
         r = requests.post(API_URL, json=payload, timeout=15)
-        return r.json().get("result", {}).get("attendance", [])
-    except:
+        data = r.json()
+        return data.get("result", {}).get("attendance", [])
+    except Exception as e:
+        log("Attendance API Error: " + str(e))
         return []
 
 def format_attendance(name, att):
-    msg = ["📊 *Attendance Report*", f"👤 {name}", "-" * 30]
+    msg = [
+        "📊 *Attendance Report*",
+        f"👤 {name}",
+        "-------------------------"
+    ]
+
     for a in att:
-        msg.append(f"✅ {a.get('sub_code')} → {a.get('attendance_percentage', 'N/A')}%")
-    msg.append("\n🤖 Automated and Sent by Vignesh and Tamil Tharshini")
+        percent = a.get("attendance_percentage", "N/A")
+        msg.append(f"✅ {a.get('sub_code')} → {percent}%")
+
+    msg.append("\n🤖 Sent with ❤️ by Vignesh and Tamil Tharshini")
     return "\n".join(msg)
 
 # ================= RESULT API =================
 def fetch_results(regno):
-    payload = {"register_num": regno, "college_code": 8107, "function": "sver"}
+    payload = {
+        "register_num": regno,
+        "college_code": 8107,
+        "function": "sver"
+    }
+
     try:
         r = requests.post(API_URL, json=payload, timeout=15)
-        return r.json().get("result", {}).get("exam_result", [])
-    except:
+        data = r.json()
+        return data.get("result", {}).get("exam_result", [])
+    except Exception as e:
+        log("Result API Error: " + str(e))
         return []
 
 def format_result(name, results):
-    msg = ["🎓✨ END SEMESTER RESULT ✨🎓", f"Hey {name} 👋", "-" * 30]
+    msg = [
+        "🎓✨ *END SEMESTER RESULT* ✨🎓",
+        f"Hey {name} 👋",
+        "-------------------------"
+    ]
+
     for r in results:
         msg.append(
             f"🏆 *{r['sub_name']}*\n"
             f"🆔 {r['sub_code']} | Sem {r['semester']}\n"
             f"🎯 Grade: *{r['grade']}*\n"
         )
-    msg.append("🤖 Automated and Sent by Vignesh and Tamil Tharshini")
+
+    msg.append("🤖 Sent with ❤️ by Vignesh and Tamil Tharshini")
     return "\n".join(msg)
+
+# ================= AUTO SEM7 RESULT MONITOR =================
+def result_monitor():
+    log("📡 Auto Result Monitor Started...")
+    cache = load_cache()
+
+    while True:
+        try:
+            for s in load_students():
+                regno = s["regno"]
+
+                if cache.get(regno, {}).get("sem7_sent"):
+                    continue
+
+                results = fetch_results(regno)
+                sem7 = [r for r in results if r.get("semester") == 7]
+
+                if sem7:
+                    send_message(s["chat_id"], format_result(s["name"], sem7))
+
+                    cache[regno] = {"sem7_sent": True}
+                    save_cache(cache)
+
+                    log(f"✅ Semester 7 Result Sent Automatically for {regno}")
+
+        except Exception as e:
+            log("Monitor Error: " + str(e))
+
+        time.sleep(CHECK_INTERVAL)
 
 # ================= TELEGRAM LISTENER =================
 pending = {}
 
 def telegram_listener():
     offset = None
-    log("💬 Telegram listener started")
+    log("💬 Telegram Listener Started...")
 
     while True:
-        r = requests.get(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-            params={"timeout": 100, "offset": offset},
-            timeout=120
-        )
+        try:
+            r = requests.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                params={"timeout": 100, "offset": offset},
+                timeout=120
+            )
 
-        updates = r.json().get("result", [])
+            updates = r.json().get("result", [])
 
-        for upd in updates:
-            offset = upd["update_id"] + 1
-            msg = upd.get("message", {})
-            chat_id = msg["chat"]["id"]
-            name = msg["chat"].get("first_name", "Student")
-            text = msg.get("text", "").strip()
+            for upd in updates:
+                offset = upd["update_id"] + 1
+                msg = upd.get("message", {})
 
-            # ---- START ----
-            if text == "/start":
-                if get_student(chat_id):
-                    send_message(chat_id, "✅ Already registered.\nUse /attendance or /result")
-                else:
-                    pending[chat_id] = "register"
-                    send_message(chat_id, "👋 Welcome!\nEnter your Register Number:")
-                continue
+                if not msg:
+                    continue
 
-            # ---- REGISTER ----
-            if chat_id in pending and pending[chat_id] == "register":
-                add_student(chat_id, text, name)
-                pending.pop(chat_id)
+                chat_id = msg["chat"]["id"]
+                name = msg["chat"].get("first_name", "Student")
+                text = msg.get("text", "").strip()
 
-                send_message(
-                    chat_id,
-                    "🎉 *Registered successfully!*\n\n"
-                    "Please use these commands 👇\n\n"
-                    "📊 /attendance – Check Attendance\n"
-                    "🎓 /result – Check Result\n"
-                    "❗ /update_regno – Update Register Number"
-                )
-                continue
+                # ================= /start =================
+                if text == "/start":
+                    if get_student(chat_id):
+                        send_message(chat_id, "✅ Already registered.\nUse /attendance or /result")
+                    else:
+                        pending[chat_id] = "register"
+                        send_message(chat_id, "👋 Welcome!\nEnter your Register Number:")
+                    continue
 
-            # ---- UPDATE REGNO ----
-            if text == "/update_regno":
-                pending[chat_id] = "update"
-                send_message(chat_id, "✏️ Enter your correct Register Number:")
-                continue
+                # ================= REGISTER =================
+                if chat_id in pending and pending[chat_id] == "register":
+                    add_student(chat_id, text, name)
+                    pending.pop(chat_id)
 
-            if chat_id in pending and pending[chat_id] == "update":
-                update_regno(chat_id, text)
-                pending.pop(chat_id)
-                send_message(chat_id, "✅ Register number updated successfully!")
-                continue
+                    send_message(
+                        chat_id,
+                        "🎉 *Registered Successfully!*\n\n"
+                        "Now you can use:\n\n"
+                        "📊 /attendance – Check Attendance\n"
+                        "🎓 /result – Check Result\n"
+                        "❗ /update_regno – Update Register Number"
+                    )
 
-            # ---- ATTENDANCE ----
-            if text == "/attendance":
-                student = get_student(chat_id)
-                att = fetch_attendance(student["regno"])
-                send_message(chat_id, format_attendance(student["name"], att))
-                continue
+                    time.sleep(1)
+                    continue
 
-            # ---- RESULT ----
-            if text == "/result":
-                student = get_student(chat_id)
-                results = fetch_results(student["regno"])
-                send_message(chat_id, format_result(student["name"], results))
-                continue
+                # ================= UPDATE REGNO =================
+                if text == "/update_regno":
+                    if not get_student(chat_id):
+                        send_message(chat_id, "⚠️ Please register first using /start")
+                    else:
+                        pending[chat_id] = "update"
+                        send_message(chat_id, "✏️ Enter your correct Register Number:")
+                    continue
 
-            # ---- UNWANTED ----
-            send_message(chat_id, "⚠️ Don’t send unwanted messages, you are being monitored!")
+                if chat_id in pending and pending[chat_id] == "update":
+                    update_regno(chat_id, text)
+                    pending.pop(chat_id)
+                    send_message(chat_id, "✅ Register Number Updated Successfully!")
+                    continue
+
+                # ================= ATTENDANCE =================
+                if text == "/attendance":
+                    student = get_student(chat_id)
+                    if not student:
+                        send_message(chat_id, "⚠️ Register first using /start")
+                        continue
+
+                    send_message(chat_id, "⏳ Fetching attendance...")
+                    att = fetch_attendance(student["regno"])
+
+                    if not att:
+                        send_message(chat_id, "❌ Attendance not available.")
+                    else:
+                        send_message(chat_id, format_attendance(student["name"], att))
+                    continue
+
+                # ================= RESULT =================
+                if text == "/result":
+                    student = get_student(chat_id)
+                    if not student:
+                        send_message(chat_id, "⚠️ Register first using /start")
+                        continue
+
+                    send_message(chat_id, "⏳ Fetching result...")
+                    results = fetch_results(student["regno"])
+
+                    if not results:
+                        send_message(chat_id, "❌ Result not available.")
+                    else:
+                        send_message(chat_id, format_result(student["name"], results))
+                    continue
+
+                # ================= UNWANTED MSG =================
+                send_message(chat_id, "⚠️ Don’t send unwanted messages, you are being monitored!")
+
+        except Exception as e:
+            log("Listener Error: " + str(e))
+            time.sleep(5)
 
 # ================= MAIN =================
 if __name__ == "__main__":
+    threading.Thread(target=result_monitor, daemon=True).start()
     threading.Thread(target=telegram_listener, daemon=True).start()
-    log("🚀 Bot is running...")
+
+    log("🚀 Bot Running Successfully...")
+
     while True:
         time.sleep(10)

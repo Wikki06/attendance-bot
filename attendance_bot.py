@@ -99,11 +99,7 @@ def fetch_attendance(regno):
     try:
         r = requests.post(API_URL, json=payload, timeout=15)
         data = r.json()
-
-        log("Attendance API Response Received")
-
         return data.get("result", {}).get("attendance", [])
-
     except Exception as e:
         log(f"Attendance API error: {e}")
         return []
@@ -116,10 +112,10 @@ def format_attendance(name, att):
     ]
 
     for a in att:
-        percent = a.get("attendance_percentage") or a.get("attendancePercentage", "N/A")
+        percent = a.get("attendance_percentage", "N/A")
         msg.append(f"✅ {a.get('sub_code')} → {percent}%")
 
-    msg.append("\n🤖 Sent with ❤️ by your Attendance Bot By Vignesh")
+    msg.append("\n🤖 Automated and Sent with ❤️ by  Vignesh and Tamil Tharshini")
     return "\n".join(msg)
 
 # ================= RESULT API =================
@@ -133,30 +129,17 @@ def fetch_results(regno):
     try:
         r = requests.post(API_URL, json=payload, timeout=15)
         data = r.json()
-
-        log("Result API Response Received")
-
         return data.get("result", {}).get("exam_result", [])
-
     except Exception as e:
         log(f"Result API error: {e}")
         return []
 
 def format_result(name, results):
-    passed = all(r["grade"] not in ["U", "RA", "AB"] for r in results)
-
     msg = [
         "🎓✨ END SEMESTER RESULT ✨🎓",
-        f"Hey {name} 👋"
+        f"Hey {name} 👋",
+        "-" * 30
     ]
-
-    msg.append(
-        "🎉 Congratulations! You cleared all subjects 💪🔥"
-        if passed else
-        "📢 Results are available. Stay strong 💙"
-    )
-
-    msg.append("-" * 30)
 
     for r in results:
         msg.append(
@@ -185,11 +168,8 @@ def result_monitor():
 
             if sem7:
                 send_message(s["chat_id"], format_result(s["name"], sem7))
-
                 cache[regno] = {"sem7_sent": True}
                 save_cache(cache)
-
-                log(f"✅ Auto Sem7 result sent for {regno}")
 
         time.sleep(CHECK_INTERVAL)
 
@@ -237,9 +217,9 @@ def telegram_listener():
                     send_message(
                         chat_id,
                         "🎉 *Registered successfully!*\n\n"
-                        "📊 /attendance – Check attendance\n"
-                        "🎓 /result – Check result\n"
-                        "✏️ /update_regno – Update register number"
+                        "Please use:\n"
+                        "📊 /attendance – Check Attendance\n"
+                        "🎓 /result – Check Result"
                     )
                     continue
 
@@ -290,14 +270,10 @@ def telegram_listener():
                         send_message(chat_id, format_result(student["name"], results))
                     continue
 
-                # ---------- INVALID ----------
+                # ---------- UNWANTED MSG ----------
                 send_message(
                     chat_id,
-                    "⚠️ Invalid command.\n\n"
-                    "/start – Register\n"
-                    "/attendance – Attendance\n"
-                    "/result – Result\n"
-                    "/update_regno – Update Register Number"
+                    "⚠️ Don’t send unwanted messages, you are being monitored!"
                 )
 
         except Exception as e:

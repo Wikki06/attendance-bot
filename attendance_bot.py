@@ -220,7 +220,7 @@ def telegram_listener():
                         "Please use:\n"
                         "📊 /attendance – Check Attendance\n"
                         "🎓 /result – Check Result"
-			"❗ /update_regno - To update your register Number
+			"❗ /update_regno - To update your register Number"
                     )
                     continue
 
